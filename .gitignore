@@ -1,0 +1,109 @@
+# SacredSDK .gitignore
+#
+# ───────────────────────────────────────────────────────────────────────
+# Current push surface: docs/ + tools/
+# ───────────────────────────────────────────────────────────────────────
+# Documentation under docs/ and the Python toolchain under tools/ are
+# public. The C++ DLL implementation (and vendored third-party C++)
+# stays held back until the public API surface stabilises.
+#
+# Strategy: deny-by-default at sdk/ root, allow-list specific
+# subdirectories below.
+
+# ─── deny-by-default in sdk/ root ───────────────────────────────────────
+/*
+!/.gitignore
+!/README.md
+!/LICENSE
+!/docs/
+!/tools/
+
+# ─── docs/ — allow only top-level .md ──────────────────────────────────
+docs/*
+!docs/*.md
+
+# Internal handoff doc — agent-to-agent context, not for public eyes.
+# Held back even though it's an .md.
+docs/HANDOFF.md
+
+# ─── tools/ — allow .py / .csv / .bat / .md / ghidra scripts ───────────
+tools/*
+!tools/*.md
+!tools/*.py
+!tools/*.csv
+!tools/*.bat
+!tools/ghidra/
+tools/ghidra/*
+!tools/ghidra/*.java
+!tools/ghidra/*.bat
+!tools/ghidra/*.md
+
+# Scratch is one-off recon scripts from earlier RE sessions; kept
+# locally for archaeology but not part of the public surface.
+tools/scratch/
+
+# Ghidra-derived decompiled C from Sacred.exe — keep local only.
+# Modders don't need it; RE hackers can regenerate from Sacred.exe
+# + the Java scripts in tools/ghidra/.
+tools/ghidra/decompiled/
+
+# ─── safety nets for things we never want anywhere ─────────────────────
+# (These mostly belong above already via the deny-by-default at /*, but
+# spell them out so a future loosening of the whitelist doesn't
+# accidentally start tracking them.)
+
+# Build artifacts
+Release/
+Debug/
+x64/
+*.obj
+*.pdb
+*.exp
+*.ilk
+*.lib
+*.dll
+*.exe
+*.bin
+
+# Vendored third-party
+imgui/
+lua/
+
+# Runtime-decrypted Sacred.exe dump — derived data, not redistributable.
+Sacred_decrypted.exe
+*.exe.bak
+
+# Logs / per-run dumps
+logs/
+*.log
+*.trace
+*.dmp
+
+# Ghidra working dirs
+ghidra/
+*.gpr
+*.rep
+*.lock~
+
+# IDE / editor cruft
+.vs/
+.vscode/
+.idea/
+**/.idea/
+.idea.*/
+*.user
+*.opensdf
+*.sdf
+*.suo
+*.sln.docstates
+
+# Python build/cache
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# OS noise
+Thumbs.db
+.DS_Store
+Desktop.ini
