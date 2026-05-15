@@ -401,6 +401,27 @@ The overlay (toggle F11 to interact) shows live bake stats:
 - ✅ **`sacred.on_trigger(name, fn)`** — Lua callback fires at game-time
   when Sacred dispatches a matching trigger (two trampolines on
   FUN_004915a0 / FUN_00491170)
+- ✅ **`ctx:gold()` / `ctx:give_gold(N)`** inside trigger handlers — direct
+  hero-struct write + cosmetic event for the coin sound
+- ✅ **`ctx:has_item(id)`** — equipment-slot scan (backpack scan TBD)
+- ✅ **`ctx:notify(text)`** — top-of-screen toast banner via overlay
+- ✅ **`q.fsm.define{…}`** — declarative quest state machines (linear
+  ordering, guards, per-step on_enter, cross-quest gates). See
+  `examples/08_questfsm.lua`.
+- ✅ **`sacred.state_get/state_set/state_dump`** + `ctx:get_var/set_var` —
+  read / overwrite Sacred's named-state store (`hq_uw`, `dq_belohnung`,
+  custom vars declared via `q.var()`). Backed by the cQuestManager array
+  at `+0x334..+0x338`. See `examples/09_state_vars.lua`.
+- ✅ **`sacred.questbook_register(quest_id)`** — append a brand-new entry
+  to Sacred's quest-display registry by calling its underlying
+  `vector::resize`. Lets a mod ship NEW quests (not just reskins) — the
+  bake-time `q.log_entry` records will then write text into the new
+  entry. Pair with `sacred.on_world_load(fn)` so the register happens
+  BEFORE the walker dispatches your tag-0x35 records.
+  See `examples/10_register_quest.lua`.
+- ✅ **`sacred.on_world_load(fn)`** — fires once per save load, the
+  moment the FunkCode walker captures cQuestManager. Right hook for
+  any "do X exactly once after world load" setup.
 - ✅ Shared `lua_State` across the whole bake — modules accumulate state, so
   `T()` calls in different mods dedupe through one combined global.res
 - ✅ Persistent Lua state — survives the bake. Handlers registered via
@@ -473,6 +494,19 @@ Drop these directly into `custom/lua/bin/<class>/<name>.lua`:
   appended to an existing vanilla NPC class. Copy → tweak constants → ship.
 - `examples/07_runtime_triggers.lua` — `sacred.on_trigger` patterns: react
   to vanilla trigger names, stack multiple handlers, capture upvalues.
+- `examples/08_questfsm.lua` — declarative multi-step quest state machines
+  via `q.fsm.define{ … }`: linear ordering, guards, per-step `on_enter`,
+  cross-quest gates. Use when a quest has more than one "this happens
+  next" beat.
+- `examples/09_state_vars.lua` — read / write Sacred's named-state store
+  from Lua (`sacred.state_get/state_set` + `ctx:get_var/set_var`).
+  Pair bake-time `q.var()` with runtime `ctx:set_var` for cross-session
+  persistence — the engine saves these vars into the save game.
+- **`examples/10_register_quest.lua` — register a BRAND-NEW quest_id**
+  with the engine's display registry, so vanilla mutators (tag-0x35
+  log_entry, kompass markers, …) accept your records. The biggest
+  long-blocker shipped: brand-new quests are now possible, not just
+  reskins of vanilla ones.
 
 ---
 
