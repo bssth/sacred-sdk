@@ -85,7 +85,7 @@ copy bin\TYPE_NPC_GLADIATOR\FunkCode.bin custom\bin\TYPE_NPC_GLADIATOR\FunkCode.
 
 ## Tooling integration
 
-- `sdk/tools/globalres_modify.py` writes output to
+- `sdk/re/py/globalres_modify.py` writes output to
   `custom/scripts/us/global.res` by default. On first invocation it clones
   the vanilla file there as a baseline. The vanilla file is never touched.
 - Future `funkcode_modify.py` / `balance_modify.py` follow the same
@@ -118,6 +118,6 @@ showing `scripts\us\global.res -> custom\scripts\us\global.res`.
 | `sdk/dllmain.cpp` | `fs_override::install()` called from DllMain |
 | `sdk/overlay.cpp` | `Custom/ overrides` panel |
 | `sdk/patches.cpp` | Patch 1 now checks `custom/` first |
-| `sdk/tools/globalres_modify.py` | writes to `custom/scripts/us/` by default |
+| `sdk/re/py/globalres_modify.py` | writes to `custom/scripts/us/` by default |
 | `custom/README.md` | user-facing instructions |
 | `custom/scripts/`, `custom/bin/` | empty skeleton dirs |

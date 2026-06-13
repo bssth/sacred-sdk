@@ -1,0 +1,72 @@
+# Disassemble the quest-book registry loader (sole writer of 0xAAC738 @ 0x451A22)
+import struct, capstone
+
+EXE = r"E:\SteamLibrary\steamapps\common\Sacred Gold\sdk\Sacred_decrypted.exe"
+IMGBASE = 0x00400000
+
+d = open(EXE, 'rb').read()
+pe = struct.unpack_from('<I', d, 0x3c)[0]
+nsec = struct.unpack_from('<H', d, pe + 6)[0]
+opt = struct.unpack_from('<H', d, pe + 0x14)[0]
+secoff = pe + 0x18 + opt
+secs = []
+for i in range(nsec):
+    o = secoff + i * 0x28
+    name = d[o:o + 8].rstrip(b'\0').decode('latin1')
+    vsz, va, rsz, ptr = struct.unpack_from('<IIII', d, o + 8)
+    secs.append((name, va, vsz, ptr, rsz))
+
+def va2off(va):
+    rva = va - IMGBASE
+    for name, sva, vsz, ptr, rsz in secs:
+        if sva <= rva < sva + max(vsz, rsz):
+            return ptr + (rva - sva)
+    return None
+
+def off2va(off):
+    for name, sva, vsz, ptr, rsz in secs:
+        if ptr <= off < ptr + rsz:
+            return IMGBASE + sva + (off - ptr)
+    return None
+
+md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
+
+def cstr(va, maxlen=120):
+    o = va2off(va)
+    if o is None: return None
+    s = d[o:o + maxlen].split(b'\0')[0]
+    if not s: return None
+    try:
+        t = s.decode('latin1')
+        if all(32 <= ord(c) < 127 for c in t) and len(t) >= 2:
+            return t
+    except Exception:
+        pass
+    return None
+
+# find fn start: scan back from 0x451A22 for CC padding or SEH prologue
+off = va2off(0x451A22)
+start = None
+o = off
+while off - o < 0x2000:
+    o -= 1
+    if d[o:o + 3] == b'\x6a\xff\x68' and d[o - 1] in (0xCC, 0xC3, 0x90, 0x00):
+        start = off2va(o); break
+    if d[o] == 0xCC and d[o - 1] == 0xCC:
+        start = off2va(o + 1); break
+print("fn start:", hex(start) if start else "???")
+
+va = start or 0x4519A0
+o = va2off(va)
+for ins in md.disasm(d[o:o + 0x900], va):
+    note = ''
+    for tok in ins.op_str.replace('[', ' ').replace(']', ' ').replace(',', ' ').split():
+        if tok.startswith('0x'):
+            v = int(tok, 16)
+            if 0x870000 + IMGBASE <= v <= 0x9F0000 + IMGBASE or 0x00870000 <= v <= 0x009F0000:
+                s = cstr(v)
+                if s:
+                    note = '   ; "%s"' % s
+    print("0x%08X  %-8s %s%s" % (ins.address, ins.mnemonic, ins.op_str, note))
+    if ins.mnemonic == 'ret' and ins.address > 0x451A22:
+        break

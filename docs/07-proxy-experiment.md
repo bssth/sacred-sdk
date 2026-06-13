@@ -116,7 +116,7 @@ Roll back: delete `ijl15.dll`, rename `ijl15_real.dll` back to `ijl15.dll` (or `
 ## Verify
 
 ```cmd
-sdk\tools\smoke_test_proxy.bat
+sdk\re\py\smoke_test_proxy.bat
 ```
 
 Launches `Sacred.exe`, waits 4 seconds, kills it, prints the resulting log. If the log appears with the expected lines, the proxy is live.

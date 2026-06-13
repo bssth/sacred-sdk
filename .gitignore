@@ -7,8 +7,10 @@ docs/HANDOFF.md
 
 # Ghidra-derived decompiled C from Sacred.exe — keep local only.
 # Modders don't need it; RE hackers can regenerate from Sacred.exe
-# + the Java scripts in tools/ghidra/.
-tools/ghidra/decompiled/
+# + the Java scripts in re/ghidra/.
+re/ghidra/decompiled/
+
+SacredStudio/obj
 
 # Build artifacts
 Release/
@@ -22,10 +24,6 @@ x64/
 *.dll
 *.exe
 *.bin
-
-# Vendored third-party
-imgui/
-lua/
 
 # Runtime-decrypted Sacred.exe dump — derived data, not redistributable.
 Sacred_decrypted.exe

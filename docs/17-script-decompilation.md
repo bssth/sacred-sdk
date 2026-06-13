@@ -10,14 +10,14 @@ For any quest prefix:
 
 ```bash
 # TEXT side (resolves all hashed string IDs to readable text)
-python sdk/tools/quest_dump.py HQ_3_1_4
+python sdk/re/py/quest_dump.py HQ_3_1_4
 
 # SCRIPT side (dumps every FunkCode bytecode record that mentions this quest)
-python sdk/tools/quest_script.py HQ_3_1_4
+python sdk/re/py/quest_script.py HQ_3_1_4
 
 # BULK (all 435 quests at once)
-python sdk/tools/quest_book.py            # → sdk/logs/questbook.md         (332 KB)
-python sdk/tools/quest_script_book.py     # → sdk/logs/quest_scripts.md     (12.5 MB)
+python sdk/re/py/quest_book.py            # → sdk/logs/questbook.md         (332 KB)
+python sdk/re/py/quest_script_book.py     # → sdk/logs/quest_scripts.md     (12.5 MB)
 ```
 
 ## Pipeline components
@@ -59,10 +59,10 @@ For each subsystem function, extracted:
 | `0x77` | `DQ_QuestSetup` | `'DQ_Quest'` |
 | `0x84` | `ShowImage` | `'witz2.bmp'` |
 
-Full table: `sdk/tools/funkcode_tags.py` and `sdk/logs/subsystem_label.txt`.
+Full table: `sdk/re/py/funkcode_tags.py` and `sdk/logs/subsystem_label.txt`.
 
 ### 4. Tag-labelled disassembler
-`sdk/tools/funkcode_disasm.py` walks records and prints them with
+`sdk/re/py/funkcode_disasm.py` walks records and prints them with
 subsystem labels:
 
 ```
@@ -79,7 +79,7 @@ subsystem labels:
 15013's title-log entry."
 
 ### 5. Quest script extractor
-`sdk/tools/quest_script.py` finds every record across the 8 class FunkCode
+`sdk/re/py/quest_script.py` finds every record across the 8 class FunkCode
 files that mentions a quest prefix, and dumps them in execution order with
 the labels above.
 
@@ -122,7 +122,7 @@ text.
 | `tools/subsystem_label.py` | extracts strings/opcodes per subsystem |
 | `tools/interpreter_strings.py` | resolves DAT_*/s_* refs to text |
 | `tools/extract_subsystem_addrs.py` | feed list to DecompileFunc |
-| `tools/ghidra/XrefsToMulti.java` | batch xref helper |
+| `re/ghidra/XrefsToMulti.java` | batch xref helper |
 | `logs/walker_dispatch_table.txt` | full 132-case table |
 | `logs/subsystem_label.txt` | per-subsystem opcodes + identifier strings |
 | `logs/quest_scripts.md` | 12.5 MB bulk script dump of all 435 quests |
@@ -165,14 +165,14 @@ TEXT card + SCRIPT dump side-by-side.
 
 Text-mod (works now):
 ```bash
-python sdk/tools/quest_dump.py NQ_5001                       # find target
-python sdk/tools/globalres_modify.py --by-name NQ_5001_LOG_TITLE --to "..."
+python sdk/re/py/quest_dump.py NQ_5001                       # find target
+python sdk/re/py/globalres_modify.py --by-name NQ_5001_LOG_TITLE --to "..."
 # Patch 1 in our DLL serves the modified file from disk on next launch
 ```
 
 Script-mod (future, requires #1-#3 above):
 ```bash
-python sdk/tools/quest_script.py NQ_5001                     # see structure
+python sdk/re/py/quest_script.py NQ_5001                     # see structure
 # edit FunkCode bytecode in `bin/TYPE_NPC_*/FunkCode.bin`
 # loaded via Patch-N-style hook (analogous to Patch 1 for global.res)
 ```

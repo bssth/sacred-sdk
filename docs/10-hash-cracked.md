@@ -53,7 +53,7 @@ def sacred_hash(name: str) -> int:
     return h & 0x7FFFFFFF
 ```
 
-Stored in `sdk/tools/sacred_hash.py` as the reusable module.
+Stored in `sdk/re/py/sacred_hash.py` as the reusable module.
 
 ## Validation
 
@@ -78,7 +78,7 @@ Coverage of the 22,493 hash-form ids in `global.res`:
 - ~17k names remain — likely handcrafted region/object IDs that need either a
   leaked .qst source dump or a smarter dictionary.
 
-Full cracked map written to `sdk/tools/hash_names.csv`.
+Full cracked map written to `sdk/re/py/hash_names.csv`.
 
 ## Naming conventions inferred
 

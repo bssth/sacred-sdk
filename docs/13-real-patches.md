@@ -92,9 +92,9 @@ effects expected.
 | `sdk/dllmain.cpp` | call `patches::install()` after `hooks::install()` |
 | `sdk/overlay.cpp` | new "2.29-rosetta patches" CollapsingHeader with live status |
 | `sdk/SacredSDK.vcxproj` | registered `patches.cpp` |
-| `sdk/tools/ghidra/FindPatch6Site.java` | new — Ghidra script that found Patch 6 site |
-| `sdk/tools/verify_patch_targets.py` | new — pre-flight byte check for both patches |
-| `sdk/tools/ghidra/decompiled/00811440_FUN_00811440.c` | new — decompiled focus-force func |
+| `sdk/re/ghidra/FindPatch6Site.java` | new — Ghidra script that found Patch 6 site |
+| `sdk/re/py/verify_patch_targets.py` | new — pre-flight byte check for both patches |
+| `sdk/re/ghidra/decompiled/00811440_FUN_00811440.c` | new — decompiled focus-force func |
 
 ## Expected overlay output at launch
 

@@ -1,6 +1,6 @@
 # 06 — FunkCode.bin value-type dictionary
 
-Curated table of value types found inside record payloads. Built from manual analysis plus iterative type-inference passes (those probe scripts have since been removed; the final dictionary lives in `sdk\tools\funkcode_ops.py`). Field-byte coverage with this dict: 76.4% on SERAPHIM.
+Curated table of value types found inside record payloads. Built from manual analysis plus iterative type-inference passes (those probe scripts have since been removed; the final dictionary lives in `sdk\re\py\funkcode_ops.py`). Field-byte coverage with this dict: 76.4% on SERAPHIM.
 
 ## Grammar reminder
 

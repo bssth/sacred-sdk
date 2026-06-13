@@ -174,9 +174,9 @@ Round-trip safety holds because it uses Sacred's own compiler.
 
 ## Files
 
-- `sdk/tools/extract_compiler_strings.py` — string sweeper for `.data`
+- `sdk/re/py/extract_compiler_strings.py` — string sweeper for `.data`
   blocks, used to find all keyword tokens
-- `sdk/tools/funkcode_grammar.py` — token / keyword reference module
-- `sdk/tools/search_va_uses.py` — finds raw 4-byte LE refs to a VA in `.text`
-- `sdk/tools/ghidra/FindStringConsumers.java` — Ghidra script for the same
+- `sdk/re/py/funkcode_grammar.py` — token / keyword reference module
+- `sdk/re/py/search_va_uses.py` — finds raw 4-byte LE refs to a VA in `.text`
+- `sdk/re/ghidra/FindStringConsumers.java` — Ghidra script for the same
   but using instruction-operand analysis

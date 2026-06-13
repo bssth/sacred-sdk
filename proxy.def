@@ -1,0 +1,9 @@
+LIBRARY ijl15
+
+EXPORTS
+    ijlGetLibVersion = ijl15_real.ijlGetLibVersion  @1
+    ijlInit          = ijl15_real.ijlInit           @2
+    ijlFree          = ijl15_real.ijlFree           @3
+    ijlRead          = ijl15_real.ijlRead           @4
+    ijlWrite         = ijl15_real.ijlWrite          @5
+    ijlErrorStr      = ijl15_real.ijlErrorStr       @6

@@ -6,6 +6,9 @@ mods in **Lua** without ever modifying the original game files.
 [![Verified](https://img.shields.io/badge/verified-Steam%20build%202.0.2.28%20%282006--10--13%29-brightgreen)]()
 [![License](https://img.shields.io/badge/license-MIT-blue)]()
 [![Status](https://img.shields.io/badge/status-alpha-orange)]()
+![MIU](https://img.shields.io/badge/made_in-Ukraine-ffd700?labelColor=0057b7)
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/V7V51ZQ1RH)
 
 ---
 

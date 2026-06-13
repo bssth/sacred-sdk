@@ -8,7 +8,7 @@ Ghidra 12.1 headless analysis of `Sacred.exe`:
 
 ```
 analyzeHeadless sdk\ghidra sacred ^
-  -import Sacred.exe -postScript FindStrings.java -scriptPath sdk\tools\ghidra
+  -import Sacred.exe -postScript FindStrings.java -scriptPath sdk\re\py\ghidra
 ```
 
 Auto-analysis completed in 79 s. All 30+ analyzers reported success. Project saved.
@@ -116,7 +116,7 @@ The decrypt track also solves all other Ghidra-related work (FunkCode tag semant
 
 ### Track 2 — hash bruteforce: negative result
 
-`sdk\tools\hash_bruteforce.py` ran 10 standard hash functions (djb2, djb2_xor, sdbm, fnv1a32, fnv1_32, crc32, adler32, jenkins lookup3, murmur3_32, loose_sum) × 7 input variants (as-is, lower, upper, +null, upper+null, with `res:` prefix, with `res:` prefix + null) over 13 631 candidate names from FunkCode.bin. Best result: 2 hits out of ~95 000 attempts. At ~5×10⁻⁶ random collision rate against the 23 123-entry id set, expected noise is ~0.5 hits per variant. The top results are statistical noise.
+`sdk\re\py\hash_bruteforce.py` ran 10 standard hash functions (djb2, djb2_xor, sdbm, fnv1a32, fnv1_32, crc32, adler32, jenkins lookup3, murmur3_32, loose_sum) × 7 input variants (as-is, lower, upper, +null, upper+null, with `res:` prefix, with `res:` prefix + null) over 13 631 candidate names from FunkCode.bin. Best result: 2 hits out of ~95 000 attempts. At ~5×10⁻⁶ random collision rate against the 23 123-entry id set, expected noise is ~0.5 hits per variant. The top results are statistical noise.
 
 Conclusion: Sacred uses a non-standard / custom hash function for symbolic `res:` lookups. The hash won't come without reading the binary. Track 2 closed; Track 1 is the only viable path.
 
@@ -129,7 +129,7 @@ New module: `sdk\dump_text.cpp` (added to vcxproj, namespace `sdk::dumptext`):
 3. As soon as entropy < 7.0 (or after 6 s fallback), dumps exactly `0x48F000` bytes from `0x401000` to `sdk\logs\text_dump.bin`.
 4. Logs each poll's entropy and the final write to `sdk\logs\sdk_loaded.log`.
 
-Companion splice tool: `sdk\tools\splice_decrypted.py`. Reads original `Sacred.exe`, replaces encrypted `.text` (raw offset `0x1000`, raw size `0x48F000`) with the decrypted bytes, writes `sdk\Sacred_decrypted.exe`. Sanity checks:
+Companion splice tool: `sdk\re\py\splice_decrypted.py`. Reads original `Sacred.exe`, replaces encrypted `.text` (raw offset `0x1000`, raw size `0x48F000`) with the decrypted bytes, writes `sdk\Sacred_decrypted.exe`. Sanity checks:
 - original `.text` entropy should be ≥ 7.5 (encrypted)
 - dumped bytes should be 5.5–6.5 (real code)
 - spliced output should contain ≥ 100 instances of `55 8B EC` (MSVC function prologue)
@@ -146,13 +146,13 @@ Ghidra launcher `run_headless.bat` now supports `import-decrypted` and `process-
 dir sdk\logs\text_dump.bin
 
 :: 3. Splice into Sacred_decrypted.exe (verifies entropy).
-python sdk\tools\splice_decrypted.py
+python sdk\re\py\splice_decrypted.py
 
 :: 4. Re-import to Ghidra (a second project, sacred_decrypted).
-sdk\tools\ghidra\run_headless.bat import-decrypted
+sdk\re\ghidra\run_headless.bat import-decrypted
 
 :: 5. Run analysis scripts against the decrypted project.
-sdk\tools\ghidra\run_headless.bat process-decrypted FindStrings.java
+sdk\re\ghidra\run_headless.bat process-decrypted FindStrings.java
 ```
 
 After step 5 the FindStrings report shows meaningful xref counts and function names. Then: decompile the FunkCode loader (`%s\FunkCode.bin` xref), the resource resolver (`:res:%d` xref), and the value-type switch table.

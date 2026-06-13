@@ -1,6 +1,6 @@
 # FunkCode TAG → Subsystem reference table
 
-Source of truth: `sdk/tools/funkcode_tags.py` (importable as Python).
+Source of truth: `sdk/re/py/funkcode_tags.py` (importable as Python).
 
 The tag byte (first byte of every record header) selects which game subsystem
 processes that record. The outer walker `FUN_00475680` does the dispatch.

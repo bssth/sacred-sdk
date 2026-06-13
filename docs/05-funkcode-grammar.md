@@ -179,5 +179,5 @@ Records with `payload[1] == 0x01` carry a declared symbol name. Tags `C` (0x43) 
 
 ## 9. Tools
 
-- [`sdk\tools\funkcode_tagmap.py`](../tools/funkcode_tagmap.py) — produces [04-funkcode-tags.md](04-funkcode-tags.md) (tag table, category breakdown, deterministic chains, samples).
-- [`sdk\tools\funkcode_grammar.py`](../tools/funkcode_grammar.py) — proves the §2 payload grammar by parsing every record's field stream against the known opcode table; reports unrecognised tails. (Supersedes the earlier `funkcode_typemap.py` probe, removed in the tools cleanup.)
+- [`sdk\re\py\funkcode_tagmap.py`](../tools/funkcode_tagmap.py) — produces [04-funkcode-tags.md](04-funkcode-tags.md) (tag table, category breakdown, deterministic chains, samples).
+- [`sdk\re\py\funkcode_grammar.py`](../tools/funkcode_grammar.py) — proves the §2 payload grammar by parsing every record's field stream against the known opcode table; reports unrecognised tails. (Supersedes the earlier `funkcode_typemap.py` probe, removed in the tools cleanup.)

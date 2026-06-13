@@ -7,7 +7,7 @@ The `tools/` directory ships publicly alongside the docs. This document records 
 ## Layout (current)
 
 ```
-sdk/tools/
+sdk/re/py/
 ├── README.md                   ← Walkthrough: "I want to X → run Y"
 ├── 53 .py scripts              ← All flat (modder-facing + workshop)
 ├── hash_names.csv              ← 23 123-entry hash dictionary (~600 KB)
@@ -39,9 +39,9 @@ Data: `hash_names.csv` (23 123 known hashes harvested from the community).
 
 ## What stays local
 
-`tools/scratch/` (12 scripts) — `recon_gold[1-9].py`, `recon_inv[1-3].py`. One-off recon iterations whose findings are already baked into `sdk/runtime_triggers.cpp`. Kept locally as RE archaeology.
+`.claude/knowledge/re/` (12 scripts) — `recon_gold[1-9].py`, `recon_inv[1-3].py`. One-off recon iterations whose findings are already baked into `sdk/runtime_triggers.cpp`. Kept locally as RE archaeology.
 
-`tools/ghidra/decompiled/` (1.8 MB / 127 C files) — decompiled output from Ghidra runs against `Sacred.exe`. Derived from copyrighted material; regenerable from a Sacred.exe + the Java scripts in `tools/ghidra/`. Keep local.
+`re/ghidra/decompiled/` (1.8 MB / 127 C files) — decompiled output from Ghidra runs against `Sacred.exe`. Derived from copyrighted material; regenerable from a Sacred.exe + the Java scripts in `re/ghidra/`. Keep local.
 
 `__pycache__/` — Python bytecode cache, never published.
 
@@ -52,6 +52,6 @@ Data: `hash_names.csv` (23 123 known hashes harvested from the community).
 1. Hard-coded game path. Most scripts have `GAME = r"E:\SteamLibrary\..."` near the top. Switch to an env var (`SACRED_GAME_DIR`) or `argparse` flag. Effort: ~1 hour.
 2. `--help` consistency. Most CLI scripts have help text but the polish varies. Standardising the format. ~1 hour.
 3. Python version statement. Most scripts target 3.10+ (some use `match` statements). Pin this in `tools/README.md`. ~5 min.
-4. `run_headless.bat` in `tools/ghidra/` has a quirk where `import` invokes `import-decrypted`. Workaround in the ghidra README. ~30 min to fix properly.
+4. `run_headless.bat` in `re/ghidra/` has a quirk where `import` invokes `import-decrypted`. Workaround in the ghidra README. ~30 min to fix properly.
 
 None of these block the public push.

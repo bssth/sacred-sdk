@@ -4,7 +4,7 @@ Three components landed in one pass:
 
 1. Resource-lookup logger (`sdk/text_logger.cpp`) — trampoline hook on
    `FUN_0080eaf0` records every (hash, result) pair the game queries.
-2. Text-mod tooling (`sdk/tools/globalres_modify.py`) — edit `global.res`
+2. Text-mod tooling (`sdk/re/py/globalres_modify.py`) — edit `global.res`
    in-place; Patch 1 already reads it from disk on every load.
 3. HD-resolution force (`sdk/hooks.cpp` + `sdk.ini`) — borderless windowed at
    custom resolution, gated by config, safe to use now that `patch6` killed the
@@ -48,7 +48,7 @@ one hash. Use `tools/seen_hashes_resolve.py` to join against
 `tools/hash_names.csv` and `global.res` text:
 
 ```
-python sdk/tools/seen_hashes_resolve.py
+python sdk/re/py/seen_hashes_resolve.py
 ```
 
 Writes `sdk/logs/seen_named.csv` with columns `hash,name,text,in_globalres`.
@@ -144,8 +144,8 @@ Overlay shows the resolved values under "Display force (sdk.ini)".
 | `sdk/overlay.cpp` | + two new CollapsingHeaders (logger stats, display force) |
 | `sdk/dump_text.cpp` | also calls `text_logger::install()` after decryption |
 | `sdk/SacredSDK.vcxproj` | registered `text_logger.cpp` |
-| `sdk/tools/globalres_modify.py` | new — text-mod helper script |
-| `sdk/tools/seen_hashes_resolve.py` | new — joins seen_hashes.csv with names+text |
+| `sdk/re/py/globalres_modify.py` | new — text-mod helper script |
+| `sdk/re/py/seen_hashes_resolve.py` | new — joins seen_hashes.csv with names+text |
 | `sdk.ini.example` | new — config template, all toggles OFF by default |
 
 ## Test order
@@ -154,15 +154,15 @@ Overlay shows the resolved values under "Display force (sdk.ini)".
    in-game). Overlay "Resource lookup logger" should show non-zero `calls` and
    `unique` counts growing. After exit:
    ```
-   python sdk/tools/seen_hashes_resolve.py
+   python sdk/re/py/seen_hashes_resolve.py
    ```
    Verify `sdk/logs/seen_named.csv` exists with rows. The rate of "with name" vs
    "(unknown)" is the live hash-namespace coverage.
 
 2. Text mod — grep for a safe string, modify it, restart, see it in-game.
    ```
-   python sdk/tools/globalres_modify.py --grep "Mick the Swift"
-   python sdk/tools/globalres_modify.py --by-hash 1269826129 --to "TEST MOD WORKS"
+   python sdk/re/py/globalres_modify.py --grep "Mick the Swift"
+   python sdk/re/py/globalres_modify.py --by-hash 1269826129 --to "TEST MOD WORKS"
    ```
    Find Mick in Bellevue (Sacred starter town); his name now reads "TEST MOD
    WORKS". Restore from `global.res.bak` after.

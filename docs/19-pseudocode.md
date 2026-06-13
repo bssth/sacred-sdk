@@ -119,7 +119,7 @@ should be rare.
 ## Capabilities
 
 1. Read any quest's logic, not just text. Run
-   `python sdk/tools/quest_script.py HQ_3_1_4` to see the if/else tree
+   `python sdk/re/py/quest_script.py HQ_3_1_4` to see the if/else tree
    that gates the quest.
 2. Bulk read all quests' logic: `sdk/logs/quest_scripts.md` contains the
    labelled bytecode of all 435 quests.

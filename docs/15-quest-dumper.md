@@ -15,7 +15,7 @@ dispatch table from `FUN_00472bc0` read out of Ghidra.
 
 ## Tooling
 
-### `sdk/tools/quest_dump.py`
+### `sdk/re/py/quest_dump.py`
 
 Single-quest text card. Takes a prefix and prints every resolvable
 `<prefix>_<suffix>` lookup. Picks suffixes from FunkCode-literal tokens (the
@@ -41,7 +41,7 @@ Marks `[F]` on suffixes that appear literally in some class's `FunkCode.bin`
 (vs. template-synthesised) — shows what Sacred actually references versus what
 was probed.
 
-### `sdk/tools/quest_book.py`
+### `sdk/re/py/quest_book.py`
 
 Bulk-dump every quest to `sdk/logs/questbook.md`. Run once, get a ~330 KB
 single-file lookup of every quest's text in the game:
@@ -78,12 +78,12 @@ DQ_<id>_<state>
 
 1. Find the quest to edit:
    ```
-   python sdk/tools/quest_dump.py --grep "Mick the Swift"
+   python sdk/re/py/quest_dump.py --grep "Mick the Swift"
    ```
 2. Identify the suffix to change (e.g. `DQ_15013_LOG_TITEL`).
 3. Replace in `global.res`:
    ```
-   python sdk/tools/globalres_modify.py --by-name DQ_15013_LOG_TITEL \
+   python sdk/re/py/globalres_modify.py --by-name DQ_15013_LOG_TITEL \
                                         --to "Goblin Genocide"
    ```
 4. Restart Sacred — Patch 1 reads the file from disk on every load.

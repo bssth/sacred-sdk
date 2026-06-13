@@ -153,7 +153,7 @@ Three steps:
 
 1. Decompile vanilla once:
    ```cmd
-   python sdk/tools/funkcode_decompile_lua.py ^
+   python sdk/re/py/funkcode_decompile_lua.py ^
        bin/TYPE_NPC_SERAPHIM/FunkCode.bin ^
        -o custom/lua/_vanilla/bin/TYPE_NPC_SERAPHIM/FunkCode.lua
    ```
@@ -527,5 +527,5 @@ runtime, no FunkCode edits:
 To understand what each record/opcode means:
 - `sdk/docs/05-funkcode-grammar.md` — record framing
 - `sdk/docs/18-funkcode-tag-table.md` — what each tag does (as known)
-- `sdk/tools/funkcode_disasm.py` — the disassembler that defines the
+- `sdk/re/py/funkcode_disasm.py` — the disassembler that defines the
   authoritative opcode table

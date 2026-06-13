@@ -1,6 +1,6 @@
 # 04 — FunkCode.bin tag map
 Auto-generated from `bin\TYPE_NPC_SERAPHIM\FunkCode.bin` (125055 top-level records).
-Re-run via `python sdk\tools\funkcode_tagmap.py`.
+Re-run via `python sdk\re\py\funkcode_tagmap.py`.
 
 ## Schema reminders
 - Framing: `[tag:u8][size:u16 BE][payload : size-3]`.

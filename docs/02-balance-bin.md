@@ -60,7 +60,7 @@ Strings are 8-aligned and 0x40 bytes apart — likely each region is a fixed 0x4
 
 ## Tooling
 
-`sdk\tools\balance_diff.py` — diff/hash/profile script. Reads steam + SacredUtils vanilla + veteran and emits this report.
+`sdk\re\py\balance_diff.py` — diff/hash/profile script. Reads steam + SacredUtils vanilla + veteran and emits this report.
 
 ## Next probes
 

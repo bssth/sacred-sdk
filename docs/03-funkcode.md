@@ -134,7 +134,7 @@ All 8 Addon variants: `475a0361…` (identical).
 
 ## Tooling
 
-- `sdk\tools\funkcode_walker.py` — TLV walker with the correct BE size parser. Dumps tag inventory, first 30 records, per-class divergence stats. Recursive mode disabled (top-level walk covers 100% of the flat stream).
+- `sdk\re\py\funkcode_walker.py` — TLV walker with the correct BE size parser. Dumps tag inventory, first 30 records, per-class divergence stats. Recursive mode disabled (top-level walk covers 100% of the flat stream).
 
 ## Next probes
 

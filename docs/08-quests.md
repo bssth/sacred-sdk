@@ -26,7 +26,7 @@ Text comes from `scripts\us\global.res`. Logic comes from `bin\TYPE_NPC_*\FunkCo
 
 ### A. Quest names (full inventory) — Done
 
-`sdk\tools\quest_inventory.py` enumerates every quest token across all 8 base FunkCode files:
+`sdk\re\py\quest_inventory.py` enumerates every quest token across all 8 base FunkCode files:
 
 | Bucket | Distinct | Total citations | Examples |
 |---|---|---|---|
@@ -51,7 +51,7 @@ One quest carries up to ~10 string keys (role/state combinations). Resolving the
 
 ### B. `global.res` decoder — Done
 
-`sdk\tools\globalres_resolve.py` parses the format end-to-end:
+`sdk\re\py\globalres_resolve.py` parses the format end-to-end:
 
 ```
 +0x00    16-byte index records, each:
@@ -152,6 +152,6 @@ In order of leverage:
 
 ## Tools relevant to this doc
 
-- [`sdk\tools\quest_inventory.py`](../tools/quest_inventory.py) — enumerates HQ/NQ/DQ/`res:` names across all 8 base FunkCode files.
-- [`sdk\tools\globalres_peek.py`](../tools/globalres_peek.py) — header/strings probe of `scripts\us\global.res`.
-- [`sdk\tools\globalres_resolve.py`](../tools/globalres_resolve.py) — full resolver: parse index, resolve id → text. Importable: `from globalres_resolve import all_ids, get_text`.
+- [`sdk\re\py\quest_inventory.py`](../tools/quest_inventory.py) — enumerates HQ/NQ/DQ/`res:` names across all 8 base FunkCode files.
+- [`sdk\re\py\globalres_peek.py`](../tools/globalres_peek.py) — header/strings probe of `scripts\us\global.res`.
+- [`sdk\re\py\globalres_resolve.py`](../tools/globalres_resolve.py) — full resolver: parse index, resolve id → text. Importable: `from globalres_resolve import all_ids, get_text`.

@@ -1,0 +1,261 @@
+<Window x:Class="SacredStudio.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:SacredStudio"
+        xmlns:model="clr-namespace:SacredStudio.Model"
+        xmlns:sys="clr-namespace:System;assembly=System.Runtime"
+        mc:Ignorable="d"
+        Title="SacredStudio" Height="800" Width="1280"
+        Background="#1E1E23" Foreground="#E0E0E0">
+
+    <Window.Resources>
+        <!-- Enum value sources for combo boxes -->
+        <ObjectDataProvider x:Key="ArchetypeValues" MethodName="GetValues"
+                            ObjectType="{x:Type sys:Enum}">
+            <ObjectDataProvider.MethodParameters>
+                <x:Type TypeName="model:NpcArchetype"/>
+            </ObjectDataProvider.MethodParameters>
+        </ObjectDataProvider>
+
+        <Style TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#E0E0E0"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+        <Style TargetType="Label">
+            <Setter Property="Foreground" Value="#B0B0B8"/>
+            <Setter Property="Padding" Value="0,4,0,1"/>
+        </Style>
+
+        <!-- ===== property panels per placement kind (implicit DataTemplates) ===== -->
+        <DataTemplate DataType="{x:Type model:NpcPlacement}">
+            <StackPanel Margin="8">
+                <Label Content="Name"/>
+                <TextBox Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"/>
+                <Grid Margin="0,4,0,0">
+                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Margin="0,0,4,0">
+                        <Label Content="World X"/>
+                        <TextBox Text="{Binding Wx, UpdateSourceTrigger=LostFocus}"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Margin="4,0,0,0">
+                        <Label Content="World Y"/>
+                        <TextBox Text="{Binding Wy, UpdateSourceTrigger=LostFocus}"/>
+                    </StackPanel>
+                </Grid>
+                <Label Content="Archetype"/>
+                <ComboBox ItemsSource="{Binding Source={StaticResource ArchetypeValues}}"
+                          SelectedItem="{Binding Archetype}"/>
+                <Grid Margin="0,4,0,0">
+                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Margin="0,0,4,0">
+                        <Label Content="NPC type id"/>
+                        <TextBox Text="{Binding NpcType, UpdateSourceTrigger=LostFocus}"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Margin="4,0,0,0">
+                        <Label Content="Sub id"/>
+                        <TextBox Text="{Binding SubId, UpdateSourceTrigger=LostFocus}"/>
+                    </StackPanel>
+                </Grid>
+                <Label Content="NPC type name (optional, e.g. VALORIAN_SWORDSMAN)"/>
+                <TextBox Text="{Binding NpcTypeName, UpdateSourceTrigger=LostFocus}"/>
+                <Grid Margin="0,4,0,0">
+                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Margin="0,0,4,0">
+                        <Label Content="Stance class"/>
+                        <TextBox Text="{Binding StanceClass, UpdateSourceTrigger=LostFocus, TargetNullValue=''}"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Margin="4,0,0,0">
+                        <Label Content="Stance matrix"/>
+                        <TextBox Text="{Binding StanceMatrix, UpdateSourceTrigger=LostFocus, TargetNullValue=''}"/>
+                    </StackPanel>
+                </Grid>
+                <Label Content="Level (optional)"/>
+                <TextBox Text="{Binding Level, UpdateSourceTrigger=LostFocus, TargetNullValue=''}"/>
+                <CheckBox Margin="0,8,0,0" Content="Quest giver" Foreground="#E0E0E0"
+                          IsChecked="{Binding QuestGiver}"/>
+                <CheckBox Margin="0,4,0,0" Content="Immortal" Foreground="#E0E0E0"
+                          IsChecked="{Binding Immortal}"/>
+                <CheckBox Margin="0,4,0,0" Content="Stationary" Foreground="#E0E0E0"
+                          IsChecked="{Binding Stationary}"/>
+            </StackPanel>
+        </DataTemplate>
+
+        <DataTemplate DataType="{x:Type model:PointPlacement}">
+            <StackPanel Margin="8">
+                <Label Content="Name"/>
+                <TextBox Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"/>
+                <Grid Margin="0,4,0,0">
+                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Margin="0,0,4,0">
+                        <Label Content="World X"/>
+                        <TextBox Text="{Binding Wx, UpdateSourceTrigger=LostFocus}"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Margin="4,0,0,0">
+                        <Label Content="World Y"/>
+                        <TextBox Text="{Binding Wy, UpdateSourceTrigger=LostFocus}"/>
+                    </StackPanel>
+                </Grid>
+            </StackPanel>
+        </DataTemplate>
+
+        <DataTemplate DataType="{x:Type model:ZonePlacement}">
+            <StackPanel Margin="8">
+                <Label Content="Name"/>
+                <TextBox Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"/>
+                <Grid Margin="0,4,0,0">
+                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Margin="0,0,4,0">
+                        <Label Content="World X"/>
+                        <TextBox Text="{Binding Wx, UpdateSourceTrigger=LostFocus}"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Margin="4,0,0,0">
+                        <Label Content="World Y"/>
+                        <TextBox Text="{Binding Wy, UpdateSourceTrigger=LostFocus}"/>
+                    </StackPanel>
+                </Grid>
+                <Grid Margin="0,4,0,0">
+                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Margin="0,0,4,0">
+                        <Label Content="Width (tiles)"/>
+                        <TextBox Text="{Binding W, UpdateSourceTrigger=LostFocus}"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Margin="4,0,0,0">
+                        <Label Content="Height (tiles)"/>
+                        <TextBox Text="{Binding H, UpdateSourceTrigger=LostFocus}"/>
+                    </StackPanel>
+                </Grid>
+            </StackPanel>
+        </DataTemplate>
+
+        <DataTemplate DataType="{x:Type model:ItemPlacement}">
+            <StackPanel Margin="8">
+                <Label Content="Name"/>
+                <TextBox Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"/>
+                <Grid Margin="0,4,0,0">
+                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Margin="0,0,4,0">
+                        <Label Content="World X"/>
+                        <TextBox Text="{Binding Wx, UpdateSourceTrigger=LostFocus}"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Margin="4,0,0,0">
+                        <Label Content="World Y"/>
+                        <TextBox Text="{Binding Wy, UpdateSourceTrigger=LostFocus}"/>
+                    </StackPanel>
+                </Grid>
+                <Label Content="Item type id"/>
+                <TextBox Text="{Binding ItemType, UpdateSourceTrigger=LostFocus}"/>
+                <Label Content="Item type name (optional, e.g. WEAPON_SWORD)"/>
+                <TextBox Text="{Binding ItemTypeName, UpdateSourceTrigger=LostFocus}"/>
+            </StackPanel>
+        </DataTemplate>
+    </Window.Resources>
+
+    <DockPanel>
+        <Menu DockPanel.Dock="Top" Background="#2A2A30" Foreground="#E0E0E0">
+            <MenuItem Header="_File" Foreground="#202020">
+                <MenuItem Header="_New" Click="OnNew"/>
+                <MenuItem Header="_Open…" Click="OnOpen"/>
+                <MenuItem Header="_Save" Click="OnSave"/>
+                <MenuItem Header="Save _As…" Click="OnSaveAs"/>
+                <Separator/>
+                <MenuItem Header="_Export init.lua…" Click="OnExportLua"/>
+                <Separator/>
+                <MenuItem Header="E_xit" Click="OnExit"/>
+            </MenuItem>
+            <MenuItem Header="_Edit" Foreground="#202020">
+                <MenuItem Header="_Delete selected" Click="OnDelete" InputGestureText="Del"/>
+            </MenuItem>
+        </Menu>
+
+        <StatusBar DockPanel.Dock="Bottom" Background="#2A2A30" Foreground="#C0C0C0">
+            <StatusBarItem><TextBlock x:Name="StatusHover" Text="hover: —"/></StatusBarItem>
+            <Separator/>
+            <StatusBarItem><TextBlock x:Name="StatusTool" Text="tool: Select"/></StatusBarItem>
+            <Separator/>
+            <StatusBarItem><TextBlock x:Name="StatusCount" Text="0 placements"/></StatusBarItem>
+        </StatusBar>
+
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="270"/>
+                <ColumnDefinition Width="5"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="5"/>
+                <ColumnDefinition Width="360"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- LEFT: tools + metadata + list -->
+            <DockPanel Grid.Column="0" Margin="6">
+                <TextBlock DockPanel.Dock="Top" Text="Tools" FontWeight="Bold" Margin="0,0,0,4"/>
+                <UniformGrid DockPanel.Dock="Top" Columns="5" Margin="0,0,0,8">
+                    <RadioButton x:Name="ToolSelect" Content="Sel" GroupName="tool" IsChecked="True"
+                                 Click="OnToolChanged" Tag="Select" Foreground="#E0E0E0"/>
+                    <RadioButton x:Name="ToolNpc" Content="NPC" GroupName="tool"
+                                 Click="OnToolChanged" Tag="Npc" Foreground="#E0E0E0"/>
+                    <RadioButton x:Name="ToolPoint" Content="Pt" GroupName="tool"
+                                 Click="OnToolChanged" Tag="Point" Foreground="#E0E0E0"/>
+                    <RadioButton x:Name="ToolZone" Content="Zone" GroupName="tool"
+                                 Click="OnToolChanged" Tag="Zone" Foreground="#E0E0E0"/>
+                    <RadioButton x:Name="ToolItem" Content="Item" GroupName="tool"
+                                 Click="OnToolChanged" Tag="Item" Foreground="#E0E0E0"/>
+                </UniformGrid>
+
+                <TextBlock DockPanel.Dock="Top" Text="Project" FontWeight="Bold" Margin="0,0,0,4"/>
+                <Grid DockPanel.Dock="Top" Margin="0,0,0,8">
+                    <Grid.RowDefinitions>
+                        <RowDefinition/><RowDefinition/><RowDefinition/>
+                    </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="80"/><ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Mod name"/>
+                    <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TbModName" Margin="0,1"/>
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Target class"/>
+                    <TextBox   Grid.Row="1" Grid.Column="1" x:Name="TbTargetClass" Margin="0,1"/>
+                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Description"/>
+                    <TextBox   Grid.Row="2" Grid.Column="1" x:Name="TbDescription" Margin="0,1"
+                               AcceptsReturn="True" TextWrapping="Wrap" Height="40" VerticalScrollBarVisibility="Auto"/>
+                </Grid>
+
+                <TextBlock DockPanel.Dock="Top" Text="Placements" FontWeight="Bold" Margin="0,0,0,4"/>
+                <ListBox x:Name="PlacementList" SelectionChanged="OnListSelectionChanged"
+                         Background="#26262C" Foreground="#E0E0E0" BorderBrush="#3A3A42">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding Display}"/>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </DockPanel>
+
+            <GridSplitter Grid.Column="1" HorizontalAlignment="Stretch" Background="#3A3A42"/>
+
+            <!-- CENTER: map -->
+            <Border Grid.Column="2" BorderBrush="#3A3A42" BorderThickness="1">
+                <local:IsoMapView x:Name="Map"/>
+            </Border>
+
+            <GridSplitter Grid.Column="3" HorizontalAlignment="Stretch" Background="#3A3A42"/>
+
+            <!-- RIGHT: properties + lua preview -->
+            <TabControl Grid.Column="4" Background="#1E1E23" Margin="2">
+                <TabItem Header="Properties">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <ContentControl x:Name="PropertyHost"/>
+                    </ScrollViewer>
+                </TabItem>
+                <TabItem Header="Lua preview">
+                    <DockPanel>
+                        <Button DockPanel.Dock="Top" Content="Regenerate" Click="OnRegenerateLua" Margin="4"/>
+                        <TextBox x:Name="LuaPreview" IsReadOnly="True" FontFamily="Consolas"
+                                 Background="#16161A" Foreground="#D4D4D4"
+                                 VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                                 TextWrapping="NoWrap"/>
+                    </DockPanel>
+                </TabItem>
+            </TabControl>
+        </Grid>
+    </DockPanel>
+</Window>
