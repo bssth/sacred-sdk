@@ -4,9 +4,9 @@ Re-run via `python sdk\tools\funkcode_tagmap.py`.
 
 ## Schema reminders
 - Framing: `[tag:u8][size:u16 BE][payload : size-3]`.
-- payload[0] is a flags/version byte (almost always 0x00).
+- payload[0] is a flags/version byte (usually 0x00).
 - When payload[1] == 0x01, a null-terminated symbol name follows at payload[2..].
-- Tail bytes after the name often encode `(type:u8, value:u32 LE)` pairs; `type=0x0b` is the only one we've confirmed so far (u32 integer).
+- Tail bytes after the name often encode `(type:u8, value:u32 LE)` pairs. Confirmed: `type=0x0b` (u32 integer).
 
 ## Tag table
 Sorted by frequency.
@@ -245,7 +245,7 @@ Sorted by frequency.
 
 ## Deterministic bigram chains (>= 95% next-token agreement)
 
-These tag-to-tag transitions happen >=95% of the time at the source side. They mark fixed-shape sub-records embedded in the stream.
+Transitions occurring >=95% of the time at the source side, marking fixed-shape sub-records embedded in the stream.
 
 | From | To | hits | of total `from` |
 |---|---|---|---|

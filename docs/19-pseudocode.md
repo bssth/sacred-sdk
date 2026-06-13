@@ -1,8 +1,7 @@
-# Pseudo-code decompilation — DONE
+# Pseudo-code decompilation
 
-Sacred FunkCode is now readable as **quest-script pseudo-code**. We can take
-any quest's bytecode records and emit a near-source-level rendering of what
-the quest does.
+FunkCode renders as quest-script pseudo-code. Any quest's bytecode records
+emit a near-source-level rendering of what the quest does.
 
 ## Sample: first 12 records of GLADIATOR FunkCode.bin
 
@@ -68,13 +67,13 @@ elif condition_C: dq_belohnung_level = 30
 ...
 ```
 
-A daily-quest reward configuration table — three reward tiers gated on
+A daily-quest reward configuration table: three reward tiers gated on
 condition opcodes 96/97/98 (some level/region check).
 
-## The complete opcode coverage
+## Opcode coverage
 
 Of the 162 opcode cases / 40 functional groups in the dispatcher
-`FUN_00472bc0`, we now decode:
+`FUN_00472bc0`, decoded:
 
 | Kind | Opcodes | What |
 |---|---|---|
@@ -104,43 +103,42 @@ should be rare.
 
 ## Quest tag coverage
 
-79 of 112 tags labelled, including all the **most-frequent** ones:
-- 0x43 / 0x69 = **VarDecl / VarAssign** (the variable system)
-- 0x42 = **BlockReader** (if/then body wrapper)
-- 0x3a = **ConditionalEval** (if expression)
-- 0x3b = **ELSE_jump** (else / forward skip)
-- 0x35 = **QuestLogSet** (writes quest-log entries)
-- 0x1a = **QuestTrigger** (registers a quest event by symbolic name)
-- 0x40 = **QuestKompassOBJ** (quest-marker on map)
-- 0x44/0x45 = **HeroQBit_set/clear**
-- 0x6d/0x71 = **PoolClear**, 0x85 = **PoolGetPos**, 0x77 = **DQ_QuestSetup**
+79 of 112 tags labelled, including the most-frequent ones:
+- 0x43 / 0x69 = VarDecl / VarAssign (the variable system)
+- 0x42 = BlockReader (if/then body wrapper)
+- 0x3a = ConditionalEval (if expression)
+- 0x3b = ELSE_jump (else / forward skip)
+- 0x35 = QuestLogSet (writes quest-log entries)
+- 0x1a = QuestTrigger (registers a quest event by symbolic name)
+- 0x40 = QuestKompassOBJ (quest-marker on map)
+- 0x44/0x45 = HeroQBit_set/clear
+- 0x6d/0x71 = PoolClear, 0x85 = PoolGetPos, 0x77 = DQ_QuestSetup
 - 0x68/0x7f/0x80 = sound / music
-- 0x84 = **ShowJokeImage** (witz1/2/3.bmp)
+- 0x84 = ShowJokeImage (witz1/2/3.bmp)
 
-## What this unlocks
+## Capabilities
 
-1. **Read any quest's logic**, not just text. Run
-   `python sdk/tools/quest_script.py HQ_3_1_4` and see the if/else tree
+1. Read any quest's logic, not just text. Run
+   `python sdk/tools/quest_script.py HQ_3_1_4` to see the if/else tree
    that gates the quest.
-2. **Bulk read all quests' logic**: `sdk/logs/quest_scripts.md` now
-   contains the labelled bytecode of all 435 quests.
-3. **Modify quest logic** (future patch-N work): once we have a script-mod
-   workflow analogous to Patch 1 for `global.res`, we can edit the FunkCode
-   bytecode through a runtime hook. The encoder is mirrored from the
-   decoder.
+2. Bulk read all quests' logic: `sdk/logs/quest_scripts.md` contains the
+   labelled bytecode of all 435 quests.
+3. Modify quest logic (future patch-N work): once a script-mod workflow
+   analogous to Patch 1 for `global.res` exists, edit the FunkCode bytecode
+   through a runtime hook. The encoder is mirrored from the decoder.
 
-## Remaining 5 % of work for true source-level emission
+## Remaining work for true source-level emission
 
 - A few inline-walker bodies (0x3b, 0x42, 0x7a etc. in `FUN_00475680`)
   still need their byte widths confirmed.
-- 33 still-unlabelled `Subsys_NN` tags (mostly 50-300 line bodies with
-  no distinctive identifier strings).
-- The "magic sentinel" cstring path for opcodes 0x0b/0x3c (rare cases
-  where the u32 == `-0x12d687` / `-2` and a cstring follows). Currently
-  treated as u32 only for safe alignment.
-- The 0x01 dialog-dispatcher's target-type-dependent tail bytes (3 ints
-  for CPOS:hero, more for CPOS:RES, etc.). Currently the 2 cstrings are
-  decoded, the tail isn't deeply parsed.
+- 33 still-unlabelled `Subsys_NN` tags (mostly 50-300 line bodies with no
+  distinctive identifier strings).
+- The "magic sentinel" cstring path for opcodes 0x0b/0x3c (rare cases where
+  the u32 == `-0x12d687` / `-2` and a cstring follows). Currently treated as
+  u32 only for safe alignment.
+- The 0x01 dialog-dispatcher's target-type-dependent tail bytes (3 ints for
+  CPOS:hero, more for CPOS:RES, etc.). The 2 cstrings are decoded, the tail
+  isn't deeply parsed.
 
 None of these block reading quest logic; they only refine display for
 edge-case records.

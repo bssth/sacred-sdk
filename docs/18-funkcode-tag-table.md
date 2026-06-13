@@ -7,8 +7,8 @@ processes that record. The outer walker `FUN_00475680` does the dispatch.
 Subsystems then call the bytecode interpreter `FUN_00472bc0` in a loop and
 handle the returned opcodes per their own action vocabulary.
 
-Coverage: **79 of 112 tags meaningfully labelled (71 %)**. The remaining
-33 are smaller bodies that didn't yield distinctive strings on first pass.
+Coverage: 79 of 112 tags labelled (71 %). The remaining 33 are smaller
+bodies that didn't yield distinctive strings on first pass.
 
 ## High-frequency tags (top 30 by usage in TYPE_NPC_GLADIATOR FunkCode.bin)
 
@@ -106,14 +106,13 @@ Coverage: **79 of 112 tags meaningfully labelled (71 %)**. The remaining
 - `0x32` MiscAction
 - `0x7a` NPC_FieldSet (modifies NPC array entry)
 
-## Unlabelled (still TODO)
+## Unlabelled (TODO)
 
-`Subsys_NN` placeholders for tags whose body didn't reveal an obvious
-identifier on first pass:
+`Subsys_NN` placeholders for tags whose body didn't reveal an identifier on
+first pass:
 
 `0x04, 0x05, 0x07, 0x0f, 0x14, 0x15, 0x19, 0x20, 0x23, 0x27, 0x28,
 0x2d, 0x30, 0x33, 0x36, 0x38, 0x39, 0x4a, 0x4d, 0x57, 0x60, 0x61, 0x63,
 0x6a, 0x6e, 0x73, 0x74, 0x75, 0x76, 0x78, 0x7b, 0x80, 0x87, 0x88, 0x89`
 
-Most are 50-300 line bodies. Identifying them is the remaining ~60 % of
-opcode-naming effort.
+Most are 50-300 line bodies, the remaining ~60 % of opcode-naming effort.

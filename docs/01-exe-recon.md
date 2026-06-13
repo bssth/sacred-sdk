@@ -9,11 +9,9 @@
 | `Config.exe` | `92ba57e9…` | — |
 | `GameServer.exe` | `8af79b02…` | — |
 
-`Testapp.exe` is the same binary as `Sacred.exe`, just renamed. Branching likely happens on `argv[0]` or a flag — probably a debug/test entrypoint we can later use.
+`Testapp.exe` is the same binary as `Sacred.exe`, renamed. Branching likely on `argv[0]` or a flag — probably a debug/test entrypoint.
 
-Build: PE32 i386 GUI, MSVC 6.0 linker, `TimeDateStamp 2006-10-13T12:25:43Z`. Subsystem 2 (GUI), ImageBase `0x400000`.
-
-**Not packed**. Imports table is full and named, `.text` is a flat 4.7 MB.
+Build: PE32 i386 GUI, MSVC 6.0 linker, `TimeDateStamp 2006-10-13T12:25:43Z`. Subsystem 2 (GUI), ImageBase `0x400000`. Not packed — imports table is full and named, `.text` is a flat 4.7 MB.
 
 ## Sections
 
@@ -25,9 +23,9 @@ Build: PE32 i386 GUI, MSVC 6.0 linker, `TimeDateStamp 2006-10-13T12:25:43Z`. Sub
 | `.rsrc` | `0x01432000` | `0x00539a18` | `0x0053a000` | R | 5.80 |
 | `.bind` | `0x0196c000` | `0x00002000` | `0x00002000` | R | 5.11 |
 
-**EP RVA = `0x196c3db`** — sits inside `.bind`, not `.text`. Classic SafeDisc/SecuROM stub layout. SacredUtils' canonical inventory lists `protect.dll` as a required runtime, but the Steam install has no `protect.dll`. Steam most likely patched `.bind` to jump straight into `.text` or replaced the stub with a thin redirector.
+EP RVA = `0x196c3db`, inside `.bind`, not `.text` — SafeDisc/SecuROM stub layout. `.text` entropy 8.00 indicates it is encrypted (see [09-ghidra-and-encrypted-text.md](09-ghidra-and-encrypted-text.md)). SacredUtils' canonical inventory lists `protect.dll` as a required runtime, but the Steam install has no `protect.dll`; Steam most likely patched `.bind` to jump straight into `.text` or replaced the stub with a thin redirector.
 
-> ⚠️ Implication for hooking: any in-process work that runs at `DllMain` time on a real DLL (e.g. our future `ijl15.dll` proxy) executes well after `.bind` is done, so the stub is not in our way.
+**Hooking implication:** any in-process work that runs at `DllMain` time (e.g. the planned `ijl15.dll` proxy) executes after `.bind` is done, so the stub is not in the way.
 
 ## Imports (high-signal entries)
 
@@ -37,15 +35,15 @@ Build: PE32 i386 GUI, MSVC 6.0 linker, `TimeDateStamp 2006-10-13T12:25:43Z`. Sub
 | `mss32.dll` | 62 | Miles Sound System |
 | `tincat2.dll` | 4 | Multiplayer transport (`TinCat_Scramble` ⇒ packets are obfuscated) |
 | `libxml2.dll` | 12 | XML parsing (loads, saves) |
-| `ijl15.dll` | **4** | Intel JPEG. ⭐ **Best proxy-DLL candidate** for future hooks |
-| `DDRAW.dll` | 3 | DirectDraw (very old renderer) |
+| `ijl15.dll` | 4 | Intel JPEG. Proxy-DLL candidate for hooks |
+| `DDRAW.dll` | 3 | DirectDraw (renderer) |
 | `WS2_32.dll` | 15 | Winsock |
 | `unicows.dll` | — | Unicode-on-Win9x shim |
 | Standard | — | KERNEL32 (123), USER32 (62), GDI32 (19), ADVAPI32 (6), ole32 (4), OLEAUT32 (5), IMM32 (10), VERSION (3), WINMM (3) |
 
-## String-mining gold
+## String-mining
 
-C++ class names leak in error/debug strings — Ghidra string-xref will give us free symbol recovery:
+C++ class names leak in error/debug strings; Ghidra string-xref gives symbol recovery:
 
 - `ItemDataMgr::saveHero` — inventory persistence
 - `LEVELUP %d to %d` — XP path
@@ -63,17 +61,17 @@ File paths referenced from `.rdata`:
 - `.\Pak\Texture.pak`, `.\PAK\MIXED.PAK`, `.\PAK\MODELS.PAK`, `.\PAK\SOUND.PAK`, `.\PAK\TILES.PAK`, `.\PAK\MODELS%.2d.PAK`
 - `./SAVE/GAME%.2d.PAK`, `./SAVE/SAVE02.PAK`, `./SAVE/GAMEF%d.PAK`
 - `.\SCRIPTS\%s\global.res` (`%s` = locale: `us`, `de`, …)
-- `.\Scripts\Balance.txt` — text source for `Balance.bin`? ⇒ worth probing whether the engine still reads `.txt` as a fallback.
+- `.\Scripts\Balance.txt` — text source for `Balance.bin`? Worth probing whether the engine still reads `.txt` as a fallback.
 
-Enum-token strings (15 747 of them like `CL_DEMON`, `CL_DRAGON`, `BONUS_B/M/R/W`, `BOW_CH/GS/LV`, `CHANCE4BLOCK`, `CHEATS`, `UI_REGION_*`) live in `.data`. These are string↔id mapping for the in-game script/balance system.
+Enum-token strings (15 747 of them, e.g. `CL_DEMON`, `CL_DRAGON`, `BONUS_B/M/R/W`, `BOW_CH/GS/LV`, `CHANCE4BLOCK`, `CHEATS`, `UI_REGION_*`) live in `.data`. These are string↔id mappings for the in-game script/balance system.
 
-> 💡 `CHEATS` is among them — SacredUtils confirms it is a launch-arg flag (`Sacred.exe CHEATS=1`).
+`CHEATS` is among them — SacredUtils confirms it is a launch-arg flag (`Sacred.exe CHEATS=1`).
 
-## Free wins already in hand
+## Facts established
 
-| Win | Why |
+| Fact | Basis |
 |---|---|
 | `Sacred.exe CHEATS=1` cheat launch arg | exists in vanilla, confirmed by SacredUtils source |
 | No DRM blocking hooks | `.bind` is a dead/neutered stub on Steam build |
 | C++ symbols readable from strings | Ghidra triage is cheap |
-| Many config strings live in `.data` | static maps usable as anchors for any future patch search |
+| Many config strings live in `.data` | static maps usable as anchors for patch search |

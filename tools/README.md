@@ -72,7 +72,7 @@ fc /b FunkCode.bin /tmp/b.bin   :: should report no differences
 | `globalres_modify.py` | Edit `scripts/<lang>/global.res` text entries by name / id / hash. Writes to `custom/scripts/<lang>/global.res` (vanilla untouched). |
 | `globalres_peek.py` | Inspect `global.res` structure: header, slot count, first-N entries, byte histogram. |
 | `globalres_resolve.py` | Reverse-lookup: given a hash, find the symbolic name (cross-checks `hash_names.csv`). |
-| `hash_names.csv` | 23 123-entry hash → name dictionary harvested from the community. ~600 KB. |
+| `hash_names.csv` | ~1 847-entry `hash,name,text` dictionary harvested from the community. ~145 KB. |
 
 Examples:
 ```cmd
@@ -162,6 +162,21 @@ to understand what they're showing you.
 |---|---|
 | `quest_inventory.py` | Quest count breakdown across all 8 classes. |
 
+### Lua catalog generators
+
+Regenerate the `custom/lua/lib/` catalogs that mods consume. Output is
+deterministic; re-run when the source changes.
+
+| Script | What it does |
+|---|---|
+| `gen_item_lua.py` | Generates `custom/lua/lib/items_gen.lua` from the in-binary `TYPE_*` table in `Sacred_decrypted.exe` (base `0x008EC328`, stride `0x44`, 5624 rows). |
+| `gen_npc_lua.py` | Generates `custom/lua/lib/npc.lua` from the community `sacred_modding - characters.csv`. |
+
+Both have input/output paths hard-coded near the top: `gen_item_lua.py`
+reads `Sacred_decrypted.exe`; `gen_npc_lua.py` defaults its CSV to
+`C:\Users\bssth\Downloads\refs\sacred_modding - characters.csv` (override
+as `argv[1]`). Edit these for a different install.
+
 ### EXE recon
 
 | Script | What it does |
@@ -172,22 +187,6 @@ to understand what they're showing you.
 | `search_txt_loader.py` | Locate the `.txt` script loader path inside Sacred.exe. |
 | `search_va_uses.py` | Find all `[reg+disp32]` accesses to a given offset (hero-struct field heat-map). |
 | `splice_decrypted.py` | Splice the runtime-decrypted `.text` dump back into a Ghidra-loadable EXE. |
-
-### Type-system history (deprecated)
-
-These scripts were iterative attempts at type inference; superseded by
-`funkcode_ops.py`. Kept for posterity / debugging the type-recovery
-process.
-
-| Script | Status |
-|---|---|
-| `funkcode_v1.py` | First-pass FunkCode profiling. |
-| `funkcode_decode_v1.py` | First walker — **wrong** size endianness (LE assumed; format is BE). Kept for history. |
-| `funkcode_typemap.py` | Type alphabet probe (~63% byte coverage). |
-| `funkcode_typeprobe.py` | First iterative type-inference (~56%). |
-| `funkcode_typeprobe2.py` | Adds Pascal strings (~62% records / 50% bytes). |
-| `funkcode_typeprobe3.py` | Conservative pass (>=90% confidence). |
-| `funkcode_typefinal.py` | Final curated dictionary (53 entries) — output is `06-funkcode-types.md`. |
 
 ### Patch / ReBorn HD compatibility
 

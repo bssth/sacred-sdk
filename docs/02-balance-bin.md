@@ -2,16 +2,15 @@
 
 24 328-byte file holding global balance tables (difficulty multipliers, region tables, …). Loaded by `Sacred.exe` early at startup.
 
-## Three variants on hand
+## Three variants
 
 | Variant | Source | SHA-256 (head) |
 |---|---|---|
 | `steam` | `E:\…\bin\Balance.bin` | `e8dbe434cec8250e…` |
-| `vanilla` | `SacredUtils\Resources\game\balance\BalanceVanilla.bin` | **identical to steam** |
+| `vanilla` | `SacredUtils\Resources\game\balance\BalanceVanilla.bin` | identical to steam |
 | `veteran` | `SacredUtils\Resources\game\balance\BalanceVeteran.bin` | `3972cc9399eea651…` |
 
-➜ Steam ships unmodified vanilla.
-➜ Veteran differs from vanilla by **only 40 bytes** in two clusters.
+Steam ships unmodified vanilla. Veteran differs from vanilla by only 40 bytes in two clusters.
 
 ## Veteran diff (40 bytes total)
 
@@ -30,12 +29,12 @@ All differences fall on 4-byte boundaries inside the float array. Decoded as IEE
 | `0x0780` | 2.83 | 11.09 |
 | `0x0788` | 1.00 | 9.26 |
 
-Two monotonic ramps, ~×6 and ~×4–7 lift. Almost certainly:
+Two monotonic ramps, ~×6 and ~×4–7 lift:
 
 - cluster A (0x72C–0x740): per-difficulty global damage / HP multiplier (Silver → Niob)
 - cluster B (0x774–0x788): a second per-difficulty curve (XP gain? loot quality?) — to be confirmed by bisecting
 
-> 🟢 Implication: a "difficulty mod" for Sacred is a **40-byte binary patch**. Trivial to express as a JSON-based mod-overlay format later.
+A "difficulty mod" is therefore a 40-byte binary patch, expressible as a JSON mod-overlay format later.
 
 ## Structural sketch
 
@@ -66,5 +65,5 @@ Strings are 8-aligned and 0x40 bytes apart — likely each region is a fixed 0x4
 ## Next probes
 
 1. Bisect cluster A — modify one float at a time in a side-by-side copy, run, observe.
-2. Find the function in `Sacred.exe` that reads offset `0x1320`/`0x72C` — gives us struct typings.
+2. Find the function in `Sacred.exe` that reads offset `0x1320`/`0x72C` — gives struct typings. (Callers identified post-decrypt: `FUN_00803920`, `FUN_00711ee0` — see [09-ghidra-and-encrypted-text.md](09-ghidra-and-encrypted-text.md).)
 3. Decide on a mod-overlay format that can express "Veteran" as a 10-line JSON.

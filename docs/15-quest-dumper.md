@@ -1,27 +1,26 @@
-# Quest text decompilation — DONE
+# Quest text decompilation
 
-The "missing pieces" listed in [08-quests.md](08-quests.md) are now closed:
+The "missing pieces" listed in [08-quests.md](08-quests.md):
 
 | 08-quests piece | Status |
 |---|---|
-| Hash function for symbolic `res:` names | ✅ recovered, see [10-hash-cracked.md](10-hash-cracked.md) |
-| Numeric `res:1024`-style ids | ✅ stringified-then-hashed, see same doc |
-| Tag semantics for FunkCode control flow | ❌ still ahead of us — needs Ghidra on `FUN_00472bc0` |
+| Hash function for symbolic `res:` names | Done — see [10-hash-cracked.md](10-hash-cracked.md) |
+| Numeric `res:1024`-style ids | Done — stringified-then-hashed, see same doc |
+| Tag semantics for FunkCode control flow | Blocked — needs Ghidra on `FUN_00472bc0` |
 
-So everything **text-level** about quests is fully resolvable now. What
-remains is the *control flow* (when does the game show which text, what
-conditions trigger which step, what gold reward), which lives in
-`FunkCode.bin` bytecode and needs the interpreter dispatch table from
-`FUN_00472bc0` to be read out of Ghidra.
+Everything text-level about quests is resolvable. What remains is control flow
+(when the game shows which text, what conditions trigger which step, what gold
+reward), which lives in `FunkCode.bin` bytecode and needs the interpreter
+dispatch table from `FUN_00472bc0` read out of Ghidra.
 
-## The tooling
+## Tooling
 
 ### `sdk/tools/quest_dump.py`
 
 Single-quest text card. Takes a prefix and prints every resolvable
-`<prefix>_<suffix>` lookup. Picks suffixes both from FunkCode-literal
-tokens (the real things Sacred references) and from a list of common
-templates (catches strings Sacred composes at runtime).
+`<prefix>_<suffix>` lookup. Picks suffixes from FunkCode-literal tokens (the
+real things Sacred references) and from a list of common templates (catches
+strings Sacred composes at runtime).
 
 ```
 python quest_dump.py HQ_3_1_4              # main quest
@@ -38,22 +37,22 @@ python quest_dump.py --list-prefixes DQ
 python quest_dump.py --grep "the goblins"  # find quests by text content
 ```
 
-Marks `[F]` on suffixes that appear literally in some class's
-`FunkCode.bin` (vs. template-synthesised). Useful to see what Sacred
-actually references versus what we just probed.
+Marks `[F]` on suffixes that appear literally in some class's `FunkCode.bin`
+(vs. template-synthesised) — shows what Sacred actually references versus what
+was probed.
 
 ### `sdk/tools/quest_book.py`
 
-Bulk-dump every quest to `sdk/logs/questbook.md`. Run once, get a
-~330 KB single-file lookup of every quest's text in the game:
+Bulk-dump every quest to `sdk/logs/questbook.md`. Run once, get a ~330 KB
+single-file lookup of every quest's text in the game:
 - 46 main quests (HQ)
 - 21 named side quests (NQ)
 - 9 runebook quests (RB)
 - 359 daily-quest instances (DQ_<numeric_id>)
 
-## Naming conventions empirically confirmed
+## Naming conventions confirmed
 
-After dumping all quests, the suffix vocabulary becomes clear:
+After dumping all quests, the suffix vocabulary:
 
 ```
 HQ_<chapter>_<section>_<step>[_<class>]_<role>_<state>
@@ -75,46 +74,44 @@ DQ_<id>_<state>
   level, then instances inherit those templates.
 ```
 
-## Workflow for text-mods
+## Text-mod workflow
 
-The full chain is now:
-
-1. **Find** the quest you want to edit:
+1. Find the quest to edit:
    ```
    python sdk/tools/quest_dump.py --grep "Mick the Swift"
    ```
-2. **Identify** the suffix to change (e.g. `DQ_15013_LOG_TITEL`).
-3. **Replace** in `global.res`:
+2. Identify the suffix to change (e.g. `DQ_15013_LOG_TITEL`).
+3. Replace in `global.res`:
    ```
    python sdk/tools/globalres_modify.py --by-name DQ_15013_LOG_TITEL \
                                         --to "Goblin Genocide"
    ```
-4. **Restart Sacred** — Patch 1 reads the file from disk on every load.
+4. Restart Sacred — Patch 1 reads the file from disk on every load.
 
-Length-changing edits are fully supported (script rewrites the offset
-table). Backup at `global.res.bak` on first modify.
+Length-changing edits are supported (script rewrites the offset table). Backup
+at `global.res.bak` on first modify.
 
 ## What remains for full decompilation
 
 The control flow. To reconstruct e.g. "this quest gives 5000 gold when the
-counter reaches 20 goblins killed", we need to read FunkCode bytecode
+counter reaches 20 goblins killed", FunkCode bytecode must be read
 semantically. That requires:
 
-1. Decompile `FUN_00472bc0` (the interpreter dispatcher). About 100 cases
-   in a big switch; we've read ~40 in earlier sessions. Each case tells us
-   what one bytecode tag does. See [06-funkcode-types.md](06-funkcode-types.md).
-2. Find the outer walker (whoever calls `FUN_00472bc0` in a loop) — that
-   gives us record boundaries and parameter passing.
+1. Decompile `FUN_00472bc0` (the interpreter dispatcher). About 100 cases in a
+   big switch; ~40 read in earlier sessions. Each case tells us what one
+   bytecode tag does. See [06-funkcode-types.md](06-funkcode-types.md).
+2. Find the outer walker (whoever calls `FUN_00472bc0` in a loop) — gives record
+   boundaries and parameter passing.
 3. With both, write a higher-level FunkCode dumper that emits readable
    "if killed(goblin, 20) then reward(5000, gold)" style output.
 
-This is "1-2 weeks" effort per the original estimate in 08-quests.md.
-Worth doing if/when we want a roundtrip "edit quest logic in text, recompile
-back to FunkCode" workflow. For text-only mods, we don't need it.
+Estimated 1-2 weeks per the original estimate in 08-quests.md. Needed for a
+roundtrip "edit quest logic in text, recompile back to FunkCode" workflow; not
+needed for text-only mods.
 
 ## Sample output
 
-Real quest dump (`HQ_3_1_4`):
+Quest dump (`HQ_3_1_4`):
 
 ```
 === HQ_3_1_4 ===

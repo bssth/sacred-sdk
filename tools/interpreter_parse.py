@@ -1,7 +1,8 @@
 """Parse the Ghidra-decompiled FUN_00472bc0 to extract every case's body and
 classify it by the API calls / RTTI types / string literals it touches.
 
-Output: a per-opcode behavior map suitable for refining funkcode_typemap.py.
+Output: a per-opcode behavior map suitable for refining the type
+dictionary in funkcode_ops.py.
 """
 import re, sys, os, collections
 try: sys.stdout.reconfigure(encoding="utf-8")

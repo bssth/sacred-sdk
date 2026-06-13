@@ -1,13 +1,12 @@
 # Script-level decompilation — full pipeline
 
-This document describes the **end-to-end FunkCode decompilation pipeline**
-that's now operational. Together with the text-side workflow (docs 14, 15)
-this gives full read access to every quest in Sacred Gold at both the text
-AND script level.
+End-to-end FunkCode decompilation pipeline. Combined with the text-side
+workflow (docs 14, 15) this gives read access to every quest at both text
+and script level.
 
-## What you can now do
+## Usage
 
-For ANY quest prefix:
+For any quest prefix:
 
 ```bash
 # TEXT side (resolves all hashed string IDs to readable text)
@@ -21,27 +20,24 @@ python sdk/tools/quest_book.py            # → sdk/logs/questbook.md         (3
 python sdk/tools/quest_script_book.py     # → sdk/logs/quest_scripts.md     (12.5 MB)
 ```
 
-## How the pipeline came together
+## Pipeline components
 
 ### 1. Bytecode interpreter (FUN_00472bc0)
-2522 lines, 162 cases, 40 functional groups. Decoded as an
-**operand-decoder**, NOT an action-executor: it returns the opcode value to
-the caller, who then dispatches per-opcode.
-
-See [16-interpreter.md](16-interpreter.md).
+2522 lines, 162 cases, 40 functional groups. An operand-decoder, not an
+action-executor: it returns the opcode value to the caller, who dispatches
+per-opcode. See [16-interpreter.md](16-interpreter.md).
 
 ### 2. Outer walker (FUN_00475680)
-2204 lines, **132 record-tag cases**. THE central routing table — given a
-FunkCode record's `tag` byte, dispatches to one of **116 subsystem
-functions**. We mapped the full table via Ghidra xref + decompile of all
-99 unique target functions.
+2204 lines, 132 record-tag cases. The central routing table: given a
+FunkCode record's `tag` byte, dispatches to one of 116 subsystem functions.
+Mapped via Ghidra xref + decompile of all 99 unique target functions.
 
-The 10 most-cited subsystem callers are the ones we identified by name in
-docs/16. With the outer walker decoded, we now know the full 116-tag
-universe and can label each record.
+The 10 most-cited subsystem callers are named in docs/16. With the outer
+walker decoded, the full 116-tag universe is known and each record can be
+labelled.
 
 ### 3. Subsystem identification
-For each subsystem function, we extracted:
+For each subsystem function, extracted:
 - Its first non-trivial FUN call
 - Its referenced string literals
 - The opcodes it handles via `if (rv == N)` chains
@@ -67,7 +63,7 @@ Full table: `sdk/tools/funkcode_tags.py` and `sdk/logs/subsystem_label.txt`.
 
 ### 4. Tag-labelled disassembler
 `sdk/tools/funkcode_disasm.py` walks records and prints them with
-human-readable subsystem labels:
+subsystem labels:
 
 ```
 00033b2b  RECORD tag=0x35 '5'  [QuestLogSet]  size=38  payload=35B
@@ -79,16 +75,15 @@ human-readable subsystem labels:
     +000b  01  DLG_OP_a   'res:DQ_15013_LOG_TITEL', '...'
 ```
 
-The shape `tag=0x35 [QuestLogSet] ... 'res:DQ_15013_LOG_TITEL'` is
-**human-readable** = "set quest 15013's title-log entry."
+`tag=0x35 [QuestLogSet] ... 'res:DQ_15013_LOG_TITEL'` reads as "set quest
+15013's title-log entry."
 
-### 5. Quest script extractor (the payoff)
+### 5. Quest script extractor
 `sdk/tools/quest_script.py` finds every record across the 8 class FunkCode
 files that mentions a quest prefix, and dumps them in execution order with
-all the labels above.
+the labels above.
 
-Concrete demo for DQ_15013 ("Green Plague" — kill 20 goblins for Frank
-Shepherd):
+Demo for DQ_15013 ("Green Plague" — kill 20 goblins for Frank Shepherd):
 
 ```
 0003393b  tag=0x1a'?' [InlineHandler_1a]  size=20  payload=17B
@@ -103,7 +98,7 @@ Shepherd):
     +000b  01  DLG_OP_a   'res:DQ_15013_LOG_TITEL', '...'     ← log: title
 ```
 
-Read alongside the TEXT side dump:
+Alongside the TEXT side dump:
 
 ```
 DQ_15013 quest card:
@@ -112,10 +107,10 @@ DQ_15013 quest card:
   _LOG_ZIEL   : 'Frank Shepherd was overjoyed and handed me a generous reward.'
 ```
 
-→ The 3 QuestLogSet records SET those exact text references. We've
-**linked logic to text** for the first time.
+The 3 QuestLogSet records set those exact text references, linking logic to
+text.
 
-## Files added in this round
+## Files added
 
 | File | Purpose |
 |---|---|
@@ -130,27 +125,27 @@ DQ_15013 quest card:
 | `tools/ghidra/XrefsToMulti.java` | batch xref helper |
 | `logs/walker_dispatch_table.txt` | full 132-case table |
 | `logs/subsystem_label.txt` | per-subsystem opcodes + identifier strings |
-| `logs/quest_scripts.md` | **12.5 MB bulk script dump** of all 435 quests |
+| `logs/quest_scripts.md` | 12.5 MB bulk script dump of all 435 quests |
 | `docs/16-interpreter.md` | updated with split-VM finding |
 | `docs/17-script-decompilation.md` | this document |
 
 ## Open work for full pseudo-code emission
 
-Three remaining gaps to "decompile DQ_15013 to readable Python":
+Three gaps remain before "decompile DQ_15013 to readable Python":
 
-1. **Identify remaining ~63 unlabeled subsystems** (mostly the medium/small
-   ones, ~50-300 lines each). Each ~10 minutes of Ghidra reading. Can be
-   automated by clustering similar bodies or extracting more specific
-   signals (FUN call patterns, memory access offsets).
-2. **Decode complex opcodes** (0x16, 0x1D, 0x1E, 0x3A, 0x6F, 0x71, 0x7A,
-   0x95) used inside subsystem bodies — they're variable-width and our
-   disassembler currently treats them as +1 byte placeholder. Need to walk
-   the case bodies in FUN_00472bc0 to extract their parameter encodings.
-3. **Decode 0x01 setup-payload variants** — the part after the 2 cstrings
-   is target-type-dependent (3 ints for CPOS:hero, etc.). Mapping these
-   gets us full operand resolution.
+1. Identify remaining ~63 unlabeled subsystems (mostly ~50-300 lines each).
+   Each ~10 minutes of Ghidra reading. Can be automated by clustering
+   similar bodies or extracting more specific signals (FUN call patterns,
+   memory access offsets).
+2. Decode complex opcodes (0x16, 0x1D, 0x1E, 0x3A, 0x6F, 0x71, 0x7A, 0x95)
+   used inside subsystem bodies — variable-width, currently treated as +1
+   byte placeholder. Need to walk the case bodies in FUN_00472bc0 to
+   extract their parameter encodings.
+3. Decode 0x01 setup-payload variants — the part after the 2 cstrings is
+   target-type-dependent (3 ints for CPOS:hero, etc.). Mapping these gives
+   full operand resolution.
 
-Once those are done, we can emit:
+Once done, emit:
 
 ```python
 quest("DQ_15013", "Green Plague"):
@@ -163,19 +158,19 @@ quest("DQ_15013", "Green Plague"):
         set_log(log_done)
 ```
 
-For now we can do a "narrative reading" of any quest by combining TEXT card
-+ SCRIPT dump side-by-side.
+Until then, a "narrative reading" of any quest is possible by combining
+TEXT card + SCRIPT dump side-by-side.
 
-## How a future text-mod or logic-mod would work
+## Mod workflows
 
-**Text-mod (works now)**:
+Text-mod (works now):
 ```bash
 python sdk/tools/quest_dump.py NQ_5001                       # find target
 python sdk/tools/globalres_modify.py --by-name NQ_5001_LOG_TITLE --to "..."
 # Patch 1 in our DLL serves the modified file from disk on next launch
 ```
 
-**Script-mod (future, requires #1-#3 above)**:
+Script-mod (future, requires #1-#3 above):
 ```bash
 python sdk/tools/quest_script.py NQ_5001                     # see structure
 # edit FunkCode bytecode in `bin/TYPE_NPC_*/FunkCode.bin`

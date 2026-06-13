@@ -1,9 +1,8 @@
 # SacredSDK Modding Guide
 
-Welcome. SacredSDK lets you mod Sacred Gold (Ascaron, 2004) **without ever
-touching the original game files**. Mods live in `custom/`, are written in
-Lua, and Sacred reads them transparently through a thin DLL we inject at
-startup.
+SacredSDK lets you mod Sacred Gold (Ascaron, 2004) without touching the
+original game files. Mods live in `custom/`, are written in Lua, and
+Sacred reads them through a thin DLL injected at startup.
 
 Verified on the Steam edition (build 2.0.2.28, 2006-10-13).
 
@@ -22,13 +21,13 @@ return q.script {
 }
 ```
 
-Launch Sacred → it loads the mod, generates `custom/bin/TYPE_NPC_GLADIATOR/
+Launch Sacred. It loads the mod, generates `custom/bin/TYPE_NPC_GLADIATOR/
 QuestCode.bin` from your Lua, and uses it instead of the vanilla file. The
 vanilla `bin/` tree is never modified.
 
 ---
 
-## 1. How it all hangs together
+## 1. How it hangs together
 
 ```
                                     ┌── DLL load ──┐
@@ -53,9 +52,9 @@ Steam runs Sacred.exe ─────────────►│  ijl15.dll  
                                                 and never knows it was modded.
 ```
 
-There are two halves: a **bake** (Lua → .bin) that runs once at game
-startup, and a **read-time override** (fs_override) that swaps in your
-custom files whenever Sacred opens something.
+Two halves: a bake (Lua → .bin) that runs once at game startup, and a
+read-time override (fs_override) that swaps in your custom files when
+Sacred opens something.
 
 ---
 
@@ -63,9 +62,9 @@ custom files whenever Sacred opens something.
 
 ```
 <Sacred Gold>/
-├── ijl15.dll                 ← SacredSDK proxy (DON'T edit)
+├── ijl15.dll                 ← SacredSDK proxy (don't edit)
 ├── ijl15_real.dll            ← original; we forward to it
-├── bin/, scripts/, …         ← vanilla; NEVER touched
+├── bin/, scripts/, …         ← vanilla; never touched
 └── custom/                   ← all your mods live here
     ├── lua/
     │   ├── lib/              ← helper modules (don't edit unless you know)
@@ -79,17 +78,17 @@ custom files whenever Sacred opens something.
     └── bin/                  ← auto-generated, served to Sacred via fs_override
 ```
 
-Rule of thumb: **anything outside `custom/lua/lib/`** is yours to edit.
+Anything outside `custom/lua/lib/` is yours to edit.
 
 ---
 
 ## 3. Authoring styles
 
-There are three layers you can write at, top to bottom:
+Three layers, top to bottom:
 
 ### 3a. High-level — `lib/quest.lua` & `lib/dialog.lua`
 
-The most ergonomic. One Lua line per quest/dialog primitive.
+One Lua line per quest/dialog primitive.
 
 ```lua
 local q = require "quest"
@@ -111,11 +110,11 @@ return q.script {
 }
 ```
 
-Use this **when there's a helper for what you want**.
+Use this when a helper exists for what you want.
 
 ### 3b. Mid-level — `lib/funkcode.lua` & `lib/raw.lua`
 
-When the high-level helpers don't cover your case, drop down a layer.
+When the high-level helpers don't cover your case.
 
 ```lua
 local raw = require "raw"
@@ -132,13 +131,13 @@ return {
 
 ### 3c. Low-level — `lib/unsafe.lua` and `_HEX`
 
-Last resort for opcodes that aren't modeled in the helpers yet.
+Last resort for opcodes not yet modeled in the helpers.
 
 ```lua
 local raw = require "raw"
 
 return {
-  -- An opcode we haven't named yet — paste the raw bytes
+  -- An opcode not yet named — paste the raw bytes
   raw.rec(0x67, 0x00, raw.hex("0b 27 25 00 00")),
 }
 ```
@@ -150,9 +149,9 @@ the payload. Round-trip stays byte-perfect.
 
 ## 4. Modding vanilla
 
-For modifying existing Sacred content, do **three steps**:
+Three steps:
 
-1. Decompile vanilla **once**:
+1. Decompile vanilla once:
    ```cmd
    python sdk/tools/funkcode_decompile_lua.py ^
        bin/TYPE_NPC_SERAPHIM/FunkCode.bin ^
@@ -169,16 +168,16 @@ For modifying existing Sacred content, do **three steps**:
    return recs
    ```
 
-3. Launch Sacred. Bake takes 2-3 s on first run. From then on it's
-   instantaneous; restart Sacred to apply edits.
+3. Launch Sacred. Bake takes 2-3 s on first run, then instantaneous;
+   restart Sacred to apply edits.
 
-### Useful `vanilla.*` helpers
+### `vanilla.*` helpers
 
 | Function | Use |
 |---|---|
 | `v.load(rel)` | Read pre-decompiled snapshot into a records list |
 | `v.gsub_strings(recs, pat, repl)` | Lua-`gsub` over every decoded string arg |
-| `v.gsub_bytes(recs, pat, repl)` | Same, **plus** inside `_HEX` fallbacks (full coverage) |
+| `v.gsub_bytes(recs, pat, repl)` | Same, plus inside `_HEX` fallbacks (full coverage) |
 | `v.for_each_op(recs, fn)` | Visit every op of every record |
 | `v.for_each_string(recs, fn)` | Visit every string arg of every op |
 | `v.records_with_tag(recs, tag)` | Filter records by tag byte |
@@ -187,8 +186,6 @@ For modifying existing Sacred content, do **three steps**:
 ---
 
 ## 5. Authoring from scratch — `lib/quest.lua` reference
-
-The high-level builders.
 
 ### State
 
@@ -207,10 +204,10 @@ q.log_entry(quest_id, title, header, start_text)
    -- res:<title>, res:<header>, res:<start_text> in global.res.
 ```
 
-### Inline strings (NEW)
+### Inline strings
 
-Stop hunting for free `res:NNNN` slots. Write text inline and the bake
-auto-routes it through `custom/scripts/us/global.res`:
+Write text inline and the bake auto-routes it through
+`custom/scripts/us/global.res` — no need to find free `res:NNNN` slots:
 
 ```lua
 local T = require "text"   -- or `q.T` after `local q = require "quest"`
@@ -226,20 +223,23 @@ return q.script {
 ```
 
 How it works:
-- Each `T(s)` returns a stable `res:SDK_<8 hex>` reference derived from the
-  string content (FNV-1a). Two identical strings dedupe to the same slot.
-- At the end of the bake, `text.flush()` reads vanilla `scripts/us/global.res`,
-  appends one new slot per unique string, and writes the result to
-  `custom/scripts/us/global.res`. Patch 1 (the `FUN_0080e680` detour) serves
-  the custom file to Sacred on the next launch.
-- Idempotent across re-bakes — flushing twice in a row produces the same file.
+- Each `T(s)` returns a stable `res:SDK_<8 hex>` reference derived from
+  the string content (FNV-1a). Two identical strings dedupe to the same
+  slot.
+- At the end of the bake, `text.flush()` reads vanilla
+  `scripts/us/global.res`, appends one new slot per unique string, and
+  writes the result to `custom/scripts/us/global.res`. Patch 1 (the
+  `FUN_0080e680` detour) serves the custom file to Sacred on the next
+  launch.
+- Idempotent across re-bakes — flushing twice in a row produces the same
+  file.
 
-Use `T.named("MY_KEY", "text")` if you need a specific symbolic name (e.g.
-to override a known vanilla string by hash).
+Use `T.named("MY_KEY", "text")` for a specific symbolic name (e.g. to
+override a known vanilla string by hash).
 
-### Runtime trigger hooks with ctx (NEW — tasks 20+21)
+### Runtime trigger hooks with ctx
 
-Attach Lua callbacks to any trigger name. Fires AT GAME-TIME when Sacred
+Attach Lua callbacks to any trigger name. Fires at game-time when Sacred
 dispatches a matching trigger from an NPC dialog or quest state change.
 
 ```lua
@@ -270,17 +270,17 @@ Every handler receives a `ctx` table as its first arg:
 | `ctx:give_gold(N)` | bool | direct write to `hero+0x3EE`; N<0 charges; clamped |
 | `ctx:charge_gold(N)` | bool | alias for `give_gold(-N)` |
 | `ctx:has_item(res)` | bool/nil | scans 18 equip slots; backpack not yet covered |
-| `ctx:set_qbit(n,v)` | bool | **stub** — use `q.set_hero_qbit` at bake-time |
-| `ctx:get_qbit(n)` | bool/nil | **stub** |
+| `ctx:set_qbit(n,v)` | bool | stub — use `q.set_hero_qbit` at bake-time |
+| `ctx:get_qbit(n)` | bool/nil | stub |
 | `ctx:notify(text)` | bool | top-of-screen gold banner via SDK overlay |
 
 ### `sacred.notify(text)`
 
 Top-of-screen toast banner (rendered by the SacredSDK overlay, not
-Sacred's own engine). Designed for "Quest completed", "Group eliminated"
-style announcements.
+Sacred's own engine). For "Quest completed", "Group eliminated" style
+announcements.
 
-**Anti-overflow:** every call goes through:
+Anti-overflow: every call goes through:
 - 256-byte hard cap (truncation)
 - 750ms minimum gap between successive accepted toasts
 - back-to-back duplicate dedup
@@ -288,7 +288,7 @@ style announcements.
 - each toast lives 4.5 seconds
 
 Returns `true` if the toast was queued, `false` if throttled / deduped /
-empty. Modders can spam-call it without overflowing the queue.
+empty. Safe to call repeatedly without overflowing the queue.
 
 ```lua
 sacred.notify("Quest completed!")
@@ -303,23 +303,20 @@ How it works:
   FUN_00491170 (Dialog-Check) — the two functions Sacred uses to fire
   triggers by name.
 - When a trigger fires, the trampoline reads the trigger name from the
-  interpreter context (`[ECX + 0xa460]`), calls our C-side dispatcher,
+  interpreter context (`[ECX + 0xa460]`), calls the C-side dispatcher,
   which looks up handlers and runs each in `pcall`. Errors are logged but
   don't break the chain.
 
 Current limitations:
-- No `ctx` argument yet — handlers run with no args. Live game-state
-  access (hero gold, inventory) comes when we bind the relevant Sacred
-  functions. Track HANDOFF task 21.
 - Triggers fired from area volumes / scripted cutscenes may not reach
-  these two dispatchers — coverage will grow as we map more callers.
-- Re-bakes during a session REPLACE the Lua state's handlers (mods
+  these two dispatchers — coverage grows as more callers are mapped.
+- Re-bakes during a session replace the Lua state's handlers (mods
   re-register from scratch each bake).
 
-### Inventory & reward (NEW)
+### Inventory & reward
 
-Native Sacred bytecode predicates and effects — the engine evaluates them
-at game-time, no runtime hook needed.
+Native Sacred bytecode predicates and effects — the engine evaluates
+them at game-time, no runtime hook needed.
 
 ```lua
 -- Check: does the hero carry item resource 17562?
@@ -341,9 +338,9 @@ q.give_gold_from_var "RewardX"  -- amount stored in named global, looked up
 ```
 
 Conditional ELSE (the partner branch fired when the predicate is false)
-is still partly reverse-engineered — see `examples/05_conditional_dialog.lua`
+is partly reverse-engineered — see `examples/05_conditional_dialog.lua`
 for the raw STACK_96/STACK_97 pattern. A `q.if_else_has_item(...)` helper
-lands once we model that encoding cleanly.
+lands once that encoding is modeled cleanly.
 
 ### Dialog primitives (from `lib/dialog.lua`)
 
@@ -369,11 +366,11 @@ q.script { rec1, rec2, list_of_recs, … }
 
 1. Edit `custom/lua/bin/<rel>/<name>.lua` in any editor.
 2. Save.
-3. Relaunch Sacred (or click **Rebake all .lua** in the SacredSDK overlay).
+3. Relaunch Sacred (or click Rebake all .lua in the SacredSDK overlay).
 4. The new `custom/bin/<rel>/<name>.bin` is generated and read by Sacred.
 5. Observe in-game.
 
-Watch `sdk/logs/sdk_loaded.log` if something doesn't bake — you'll see the
+Watch `sdk/logs/sdk_loaded.log` if something doesn't bake — it shows the
 exact Lua error and which file failed.
 
 The overlay (toggle F11 to interact) shows live bake stats:
@@ -387,69 +384,70 @@ The overlay (toggle F11 to interact) shows live bake stats:
 
 ### Working
 
-- ✅ Lua 5.4 embedded in DLL — full standard library available
-- ✅ Author from scratch using `lib/quest.lua` builders
-- ✅ Load + mutate vanilla via `lib/vanilla.lua`
-- ✅ Byte-perfect round-trip (vanilla → Lua → vanilla — verified on 132 of 132 vanilla `.bin` files)
-- ✅ `require` works for `custom/lua/lib/`-relative modules
-- ✅ `sacred.log(msg)` writes to `sdk_loaded.log` and the overlay ring
-- ✅ `sacred.read_file(rel)` reads any file under `<game>/`
-- ✅ `sacred.write_file(rel, bytes)` writes under `custom/` (used by text.lua)
-- ✅ **Inline strings via `T"..."`** — auto-baked into `custom/scripts/us/global.res`
-- ✅ **`q.has_item(item)` / `q.if_has_item(item, body)`** — native bytecode predicate
-- ✅ **`q.give_gold(amount)` / `q.charge_gold(amount)`** — native gold ops
-- ✅ **`sacred.on_trigger(name, fn)`** — Lua callback fires at game-time
+- Done — Lua 5.4 embedded in DLL, full standard library available
+- Done — Author from scratch using `lib/quest.lua` builders
+- Done — Load + mutate vanilla via `lib/vanilla.lua`
+- Done — Byte-perfect round-trip (vanilla → Lua → vanilla, verified on 132 of 132 vanilla `.bin` files)
+- Done — `require` works for `custom/lua/lib/`-relative modules
+- Done — `sacred.log(msg)` writes to `sdk_loaded.log` and the overlay ring
+- Done — `sacred.read_file(rel)` reads any file under `<game>/`
+- Done — `sacred.write_file(rel, bytes)` writes under `custom/` (used by text.lua)
+- Done — Inline strings via `T"..."`, auto-baked into `custom/scripts/us/global.res`
+- Done — `q.has_item(item)` / `q.if_has_item(item, body)`, native bytecode predicate
+- Done — `q.give_gold(amount)` / `q.charge_gold(amount)`, native gold ops
+- Done — `sacred.on_trigger(name, fn)`, Lua callback fires at game-time
   when Sacred dispatches a matching trigger (two trampolines on
   FUN_004915a0 / FUN_00491170)
-- ✅ **`ctx:gold()` / `ctx:give_gold(N)`** inside trigger handlers — direct
+- Done — `ctx:gold()` / `ctx:give_gold(N)` inside trigger handlers, direct
   hero-struct write + cosmetic event for the coin sound
-- ✅ **`ctx:has_item(id)`** — equipment-slot scan (backpack scan TBD)
-- ✅ **`ctx:notify(text)`** — top-of-screen toast banner via overlay
-- ✅ **`q.fsm.define{…}`** — declarative quest state machines (linear
+- Done — `ctx:has_item(id)`, equipment-slot scan (backpack scan TBD)
+- Done — `ctx:notify(text)`, top-of-screen toast banner via overlay
+- Done — `q.fsm.define{…}`, declarative quest state machines (linear
   ordering, guards, per-step on_enter, cross-quest gates). See
   `examples/08_questfsm.lua`.
-- ✅ **`sacred.state_get/state_set/state_dump`** + `ctx:get_var/set_var` —
+- Done — `sacred.state_get/state_set/state_dump` + `ctx:get_var/set_var`,
   read / overwrite Sacred's named-state store (`hq_uw`, `dq_belohnung`,
   custom vars declared via `q.var()`). Backed by the cQuestManager array
   at `+0x334..+0x338`. See `examples/09_state_vars.lua`.
-- ✅ **`sacred.questbook_register(quest_id)`** — append a brand-new entry
+- Done — `sacred.questbook_register(quest_id)`, append a brand-new entry
   to Sacred's quest-display registry by calling its underlying
-  `vector::resize`. Lets a mod ship NEW quests (not just reskins) — the
-  bake-time `q.log_entry` records will then write text into the new
-  entry. Pair with `sacred.on_world_load(fn)` so the register happens
-  BEFORE the walker dispatches your tag-0x35 records.
-  See `examples/10_register_quest.lua`.
-- ✅ **`sacred.on_world_load(fn)`** — fires once per save load, the
-  moment the FunkCode walker captures cQuestManager. Right hook for
-  any "do X exactly once after world load" setup.
-- ✅ Shared `lua_State` across the whole bake — modules accumulate state, so
-  `T()` calls in different mods dedupe through one combined global.res
-- ✅ Persistent Lua state — survives the bake. Handlers registered via
+  `vector::resize`. Lets a mod ship new quests (not just reskins); the
+  bake-time `q.log_entry` records then write text into the new entry.
+  Pair with `sacred.on_world_load(fn)` so the register happens before the
+  walker dispatches your tag-0x35 records. See
+  `examples/10_register_quest.lua`.
+- Done — `sacred.on_world_load(fn)`, fires once per save load, the moment
+  the FunkCode walker captures cQuestManager. Hook for any "do X exactly
+  once after world load" setup.
+- Done — Shared `lua_State` across the whole bake; modules accumulate
+  state, so `T()` calls in different mods dedupe through one combined
+  global.res
+- Done — Persistent Lua state, survives the bake. Handlers registered via
   `sacred.on_trigger` live until Sacred exits.
 
 ### Limitations (today)
 
-- 🟡 `if/else` from Lua — only the `if-then` form is fully helper-wrapped.
-  The `else` branch via STACK_96/STACK_97 markers needs `raw.rec` until we
-  model the encoding cleanly. See `examples/05_conditional_dialog.lua`.
-- ❌ Live game-state access (hero gold, inventory, position) from Lua — Sacred
-  evaluates checks natively; Lua only emits the bytecode.
-- ❌ Hot reload — you need to relaunch Sacred to pick up Lua edits.
-- ❌ Custom opcodes — every record must use one of Sacred's 156 native
-  opcodes (because the bytecode is executed by Sacred's own interpreter).
-- ❌ Drop-item-into-inventory — `tag-0x37 ItemDrop` is the suspected encoding
-  but not fully verified yet. Pattern not yet exposed via a helper.
+- Partial — `if/else` from Lua: only the `if-then` form is fully
+  helper-wrapped. The `else` branch via STACK_96/STACK_97 markers needs
+  `raw.rec` until the encoding is modeled cleanly. See
+  `examples/05_conditional_dialog.lua`.
+- Blocked — Live game-state access (hero gold, inventory, position) from
+  Lua: Sacred evaluates checks natively; Lua only emits the bytecode.
+- Blocked — Hot reload: relaunch Sacred to pick up Lua edits.
+- Blocked — Custom opcodes: every record must use one of Sacred's 156
+  native opcodes (the bytecode is executed by Sacred's own interpreter).
+- Blocked — Drop-item-into-inventory: `tag-0x37 ItemDrop` is the
+  suspected encoding but not fully verified. Not yet exposed via a
+  helper.
 
 ### Planned
 
-- 🟡 Runtime trigger hooks: `sacred.on_trigger("name", function(ctx) … end)`
-  so mod logic fires when Sacred dispatches the trigger and `ctx` exposes
-  game state.
-- 🟡 Wider `lib/quest.lua` coverage — more recognised vanilla patterns
-  mean more readable decompiled scripts and shorter mods.
-- 🟡 Hot reload via file-watcher.
-- 🟡 Source-level decompiler (`funkcode_decompile_semantic.py`) reaching
-  >50 % pattern coverage so vanilla quests can be edited as scripts.
+- Planned — Wider `lib/quest.lua` coverage: more recognised vanilla
+  patterns mean more readable decompiled scripts and shorter mods.
+- Planned — Hot reload via file-watcher.
+- Planned — Source-level decompiler (`funkcode_decompile_semantic.py`)
+  reaching >50 % pattern coverage so vanilla quests can be edited as
+  scripts.
 
 ---
 
@@ -465,7 +463,7 @@ The overlay (toggle F11 to interact) shows live bake stats:
 
 ### "Game crashes after I save my mod"
 
-You probably emitted invalid bytecode. Sacred's interpreter is not very
+You probably emitted invalid bytecode. Sacred's interpreter is not
 forgiving. Roll back your edit, relaunch, then iterate in smaller steps.
 
 If you're using `raw.rec` with unknown payloads, check that:
@@ -475,45 +473,59 @@ If you're using `raw.rec` with unknown payloads, check that:
 
 ### "I get a Lua syntax error"
 
-`sdk/logs/sdk_loaded.log` will show `[lua_bake] <file>: lua error: <msg>`.
-The error includes file path and line number.
+`sdk/logs/sdk_loaded.log` shows `[lua_bake] <file>: lua error: <msg>`,
+including file path and line number.
 
 ---
 
 ## 9. Examples
 
-Drop these directly into `custom/lua/bin/<class>/<name>.lua`:
+Drop these into `custom/lua/bin/<class>/<name>.lua`:
 
 - `examples/01_hello.lua` — minimal mod, just declares state
 - `examples/02_text_swap.lua` — bulk-rewrite vanilla via gsub
 - `examples/03_dialog_block.lua` — author one dialog scene from scratch
 - `examples/04_full_quest.lua` — small standalone quest
 - `examples/05_conditional_dialog.lua` — native Sacred branching skeleton
-- **`examples/06_sidequest.lua` — full side-quest template (start here!)**
-  — inline strings, journal, NPC scenes, inventory check, gold reward — all
-  appended to an existing vanilla NPC class. Copy → tweak constants → ship.
-- `examples/07_runtime_triggers.lua` — `sacred.on_trigger` patterns: react
-  to vanilla trigger names, stack multiple handlers, capture upvalues.
+- `examples/06_sidequest.lua` — full side-quest template: inline strings,
+  journal, NPC scenes, inventory check, gold reward, appended to an
+  existing vanilla NPC class. Copy, tweak constants, ship.
+- `examples/07_runtime_triggers.lua` — `sacred.on_trigger` patterns:
+  react to vanilla trigger names, stack multiple handlers, capture
+  upvalues.
 - `examples/08_questfsm.lua` — declarative multi-step quest state machines
   via `q.fsm.define{ … }`: linear ordering, guards, per-step `on_enter`,
   cross-quest gates. Use when a quest has more than one "this happens
   next" beat.
 - `examples/09_state_vars.lua` — read / write Sacred's named-state store
-  from Lua (`sacred.state_get/state_set` + `ctx:get_var/set_var`).
-  Pair bake-time `q.var()` with runtime `ctx:set_var` for cross-session
+  from Lua (`sacred.state_get/state_set` + `ctx:get_var/set_var`). Pair
+  bake-time `q.var()` with runtime `ctx:set_var` for cross-session
   persistence — the engine saves these vars into the save game.
-- **`examples/10_register_quest.lua` — register a BRAND-NEW quest_id**
-  with the engine's display registry, so vanilla mutators (tag-0x35
-  log_entry, kompass markers, …) accept your records. The biggest
-  long-blocker shipped: brand-new quests are now possible, not just
-  reskins of vanilla ones.
+- `examples/10_register_quest.lua` — register a brand-new quest_id with
+  the engine's display registry, so vanilla mutators (tag-0x35
+  log_entry, kompass markers, …) accept your records. Brand-new quests
+  are possible, not just reskins of vanilla ones.
 
 ---
 
+## 9b. Runtime NPCs & quests (addon layer)
+
+Spawn living creatures, set archetypes (guard / aggressive / passive /
+immortal), suppress vanilla quests, override the hero spawn — all at
+runtime, no FunkCode edits:
+- `sdk/docs/23-npc-runtime.md` — NPC spawn/behavior API + RE addr/offsets
+- `sdk/docs/24-storyline.md` — storyline layer: FunkCode grammar
+  (102 tags / ~127 script keywords), names, "?!" quest-giver icon,
+  ground items, NPC teleport, equip; + the scratch-report index
+- `custom/lua/examples/14_npc_runtime.lua` — NPC spawn/behavior example
+- `custom/lua/examples/15_storyline.lua` — quest-giver / item / teleport
+- libs: `npcobj` (OOP wrapper), `npc` (474 creature constants),
+  `classes` (8 hero classes)
+
 ## 10. Reverse-engineering reference
 
-If you want to understand what each record/opcode means, see:
+To understand what each record/opcode means:
 - `sdk/docs/05-funkcode-grammar.md` — record framing
-- `sdk/docs/18-funkcode-tag-table.md` — what each tag does (as we know it)
+- `sdk/docs/18-funkcode-tag-table.md` — what each tag does (as known)
 - `sdk/tools/funkcode_disasm.py` — the disassembler that defines the
   authoritative opcode table

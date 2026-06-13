@@ -1,9 +1,8 @@
-# Sacred resource-name hash — cracked
+# Sacred resource-name hash
 
-After splicing the decrypted `.text` back into `Sacred.exe` and running Ghidra
-auto-rename, the two functions that drive `global.res` lookup were finally
-readable. The string-name path (`FUN_0080e780`) contains the hash function
-verbatim.
+The two functions driving `global.res` lookup are readable after splicing the
+decrypted `.text` back into `Sacred.exe` and running Ghidra auto-rename. The
+string-name path (`FUN_0080e780`) contains the hash function verbatim.
 
 ## The functions
 
@@ -15,7 +14,7 @@ verbatim.
 0x0084bce6  toupper() — MSVC default-locale fast path
 ```
 
-The `Sacred.exe` import-by-name flow goes:
+Import-by-name flow:
 
 ```
 caller --resource("FOO_BAR") --> 0x0080e780
@@ -28,12 +27,12 @@ caller --resource("FOO_BAR") --> 0x0080e780
                                     └──> 0x0080eaf0(hash) ──> entry / "GetResource HASH %d failed"
 ```
 
-## Algorithm (faithful)
+## Algorithm
 
-The key subtlety: `uVar6 * 0x71` overflows 32-bit, the result is cast back to
-signed `int` for the modulo, and C's signed `%` keeps the dividend's sign.
-A pure mathematical `(c + h*113) % MOD` formulation produces **zero** hits;
-the 32-bit overflow version produces thousands.
+`uVar6 * 0x71` overflows 32-bit; the result is cast back to signed `int` for
+the modulo, and C's signed `%` keeps the dividend's sign. A pure
+`(c + h*113) % MOD` formulation produces zero hits; the 32-bit overflow version
+produces thousands.
 
 ```python
 MOD = 0x3B9AC9F7    # 999_999_991, prime
@@ -76,8 +75,8 @@ Coverage of the 22,493 hash-form ids in `global.res`:
 - 1,847 additional via template brute-force (`hash_expand.py`),
   using incremental hashing (left-fold associativity) so 16M name
   trials take ~5s in pure Python
-- ~17k names remain — almost certainly handcrafted region/object IDs
-  that need either a leaked .qst source dump or a smarter dictionary.
+- ~17k names remain — likely handcrafted region/object IDs that need either a
+  leaked .qst source dump or a smarter dictionary.
 
 Full cracked map written to `sdk/tools/hash_names.csv`.
 
@@ -104,14 +103,14 @@ Full cracked map written to `sdk/tools/hash_names.csv`.
 | `CITY_<NAME>_<N>` | city name variant N (multiple-language fallbacks)   |
 | `NPC_AUDIO_<TAG>_<a>_<b>_<c>` | voice-line subtitle                     |
 
-## Why this matters
+## Implications
 
-- Quest text is now fully decodable: any reference to `res:HHH` in script files
-  resolves to a meaningful string with a meaningful name.
-- The reverse direction works too: once we want to mod a string, we hash its
-  intended new name and inject `(hash, replacement_text)` into the loaded pool.
-- The same hash almost certainly drives the FunkCode tag dictionary's
-  symbolic references (we'll verify in the next pass).
+- Quest text is decodable: any `res:HHH` reference in script files resolves to a
+  named string.
+- Reverse direction works: hash an intended new name and inject
+  `(hash, replacement_text)` into the loaded pool to mod a string.
+- The same hash likely drives the FunkCode tag dictionary's symbolic
+  references (to verify in the next pass).
 
 ## Stringify rule for numeric ids
 
@@ -120,9 +119,9 @@ bit-31-clear branch of `FUN_006726f0`. The id is **decimal-stringified**
 inside `FUN_005f6290` before hashing — so `resource(17000)` ultimately calls
 `FUN_0080eaf0(hash("17000"))`.
 
-Verified empirically: every one of the 823 entries in the community
-`names.csv` (ids 17000..17822) matches `global.res` under
-`sacred_hash(str(id))`. Helper: `tools/sacred_hash.py::hash_for_id(int)`.
+Verified: every one of the 823 entries in the community `names.csv`
+(ids 17000..17822) matches `global.res` under `sacred_hash(str(id))`. Helper:
+`tools/sacred_hash.py::hash_for_id(int)`.
 
 Complete lookup model:
 
@@ -136,16 +135,16 @@ resource_lookup(id):
 
 ## Open questions
 
-1. **The other ~17k names.** Our 3,017+1,847 hits came from binaries and
-   template brute-force — the rest live only in design docs / removed assets.
-   A live `FUN_0080eaf0` log hook (next milestone) will trivially cover
-   whatever the game actually queries during play.
-2. **PE BINARY resource pool.** The bit-31 dispatcher in `FUN_006726f0` selects
-   between two pools. We've identified one (`global.res`); the other is loaded
-   by `FUN_0080e680` from PE `BINARY` resources via chained-XOR (last word
-   XOR `0x45AD`, then propagating). Extraction script still to write.
-3. **Is the dispatcher's bit-31 the same as the hash's bit-31 mask?** Strongly
-   suspect yes — the hash strips bit 31, and the dispatcher uses bit 31 of an
-   already-numeric id to switch pools. So an integer with bit 31 set is "this
-   is a hashed name in pool A," and without bit 31 it's "this is a literal id
-   in pool B." Verify by tracing a few callers.
+1. The other ~17k names. The 3,017+1,847 hits came from binaries and template
+   brute-force; the rest live only in design docs / removed assets. A live
+   `FUN_0080eaf0` log hook (next milestone) will cover whatever the game queries
+   during play.
+2. PE BINARY resource pool. The bit-31 dispatcher in `FUN_006726f0` selects
+   between two pools. One is identified (`global.res`); the other is loaded by
+   `FUN_0080e680` from PE `BINARY` resources via chained-XOR (last word XOR
+   `0x45AD`, then propagating). Extraction script still to write.
+3. Whether the dispatcher's bit-31 is the same as the hash's bit-31 mask.
+   Likely yes — the hash strips bit 31, and the dispatcher uses bit 31 of an
+   already-numeric id to switch pools. So an integer with bit 31 set is "hashed
+   name in pool A," without bit 31 it's "literal id in pool B." Verify by
+   tracing a few callers.

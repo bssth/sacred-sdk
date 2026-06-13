@@ -1,10 +1,8 @@
-# First real hook — Player Inspector (read-only)
+# First hook — Player Inspector (read-only)
 
-This is the "training wheels" hook: we never patch instructions, only read
-memory via known offsets. If the chain doesn't resolve (e.g. main menu, no
-character loaded) we render a greyed `(no player loaded)` row — no crash.
+A read-only hook: never patches instructions, only reads memory via known offsets. If the chain doesn't resolve (e.g. main menu, no character loaded) it renders a greyed `(no player loaded)` row instead of crashing.
 
-## Anatomy of a CE pointer chain
+## CE pointer chain
 
 CE's offset list is applied bottom-up. For the Health entry:
 
@@ -13,7 +11,7 @@ Address  : "Sacred.exe"+006D5C40
 Offsets  : 4D8, 3AC, 4, 4
 ```
 
-means
+resolves as:
 
 ```
 p = *(uintptr_t*)(image_base + 0x6D5C40)
@@ -23,9 +21,7 @@ p = *(uintptr_t*)(p + 0x3AC)    ← struct base
 hp = *(int32_t*)(p + 0x4D8)     ← top offset is the FIELD READ, not a deref
 ```
 
-For all other CT entries with the same chain shape, only the top offset
-(the field offset) changes. We resolve the struct base once and read each
-field directly from `base + field_offset`.
+All other CT entries share the same chain shape; only the top (field) offset changes. Resolve the struct base once, then read each field directly from `base + field_offset`.
 
 ## Player struct field map (from CT)
 
@@ -60,25 +56,17 @@ All offsets relative to the resolved struct base.
 
 Skill ids 1..33 mapped to names in `player_state.cpp::SKILL_NAMES`.
 
-## Why it's not a "hook" yet — and why that's OK
+## Status: read-only, not yet a code hook
 
-This module never patches code; it just walks live memory. It is the
-**foundation** the actual hooks will rely on:
+This module never patches code; it walks live memory. It is the foundation later hooks rely on:
 
-1. Verifies the SDK can resolve real game state stably (validates our DLL
-   layout, CT data, and the no-ASLR assumption).
-2. Gives instant visual feedback: any future hook that *modifies* state will
-   show its effect in this panel within one frame.
-3. Establishes the pattern for read-only inspector panels (NPCs nearby,
-   spawned creatures, world position, etc.) — all of which use the same CT
-   methodology.
+1. Verifies the SDK can resolve real game state stably (validates DLL layout, CT data, and the no-ASLR assumption).
+2. Gives visual feedback: any future hook that modifies state shows its effect in this panel within one frame.
+3. Establishes the pattern for read-only inspector panels (NPCs nearby, spawned creatures, world position, etc.), all using the same CT methodology.
 
-The next step — a proper code hook — will be MinHook on
-`FUN_0080eaf0` (the resource dictionary lookup at va:0x0080EAF0) so we can:
-- Log every (hash, returned_text) pair the game ever asks for, dramatically
-  expanding our `hash_names.csv`.
-- Inject replacement strings by returning a fake entry for chosen hashes
-  (text-mod without repacking `global.res`).
+Next step is a code hook: MinHook on `FUN_0080eaf0` (resource dictionary lookup at va:0x0080EAF0) to:
+- Log every (hash, returned_text) pair the game requests, expanding `hash_names.csv`.
+- Inject replacement strings by returning a fake entry for chosen hashes (text-mod without repacking `global.res`).
 
 ## Build
 
@@ -96,13 +84,8 @@ copy /Y "...\sdk\Release\ijl15.dll" "...\Sacred Gold\ijl15.dll"
 - `sdk/overlay.cpp` — new `Player (read-only)` CollapsingHeader
 - `sdk/SacredSDK.vcxproj` — registered `player_state.cpp`
 
-## Side discoveries this session
+## Side discoveries
 
-- **`hash(str(int_id))` is the bit-31-clear lookup transform.** All 823
-  community names.csv entries (ids 17000..17822) match `global.res` under
-  `sacred_hash(str(id))`. So `FUN_0080e780(numeric_id)` decimal-stringifies
-  before hashing. Helper `sacred_hash.hash_for_id(int)` added.
-- **Combat-art ids are bitfield-shifted indices**, not hashes (multiples of
-  `0x10000`). They're a FunkCode payload type, not a global.res key.
-- **Character-class id is the high byte of a u16** in the NPC struct; the
-  player struct stores only the index (1..9) in u16 form.
+- `hash(str(int_id))` is the bit-31-clear lookup transform. All 823 community names.csv entries (ids 17000..17822) match `global.res` under `sacred_hash(str(id))`, so `FUN_0080e780(numeric_id)` decimal-stringifies before hashing. Helper `sacred_hash.hash_for_id(int)` added.
+- Combat-art ids are bitfield-shifted indices (multiples of `0x10000`), not hashes. They are a FunkCode payload type, not a global.res key.
+- Character-class id is the high byte of a u16 in the NPC struct; the player struct stores only the index (1..9) in u16 form.

@@ -1,41 +1,28 @@
 # SacredSDK — documentation
 
-If you just want to write a mod, **start here**:
+To write a mod, start at [MODDING_GUIDE.md](MODDING_GUIDE.md) — the modder-facing manual.
 
-→ **[MODDING_GUIDE.md](MODDING_GUIDE.md)** — the modder-facing manual.
-
-The rest of this directory is a reverse-engineering journal,
-preserved in chronological order so anyone who wants to understand
-*why* the SDK is shaped the way it is, or wants to extend it into
-territory we haven't covered yet, can pick up the thread.
+The rest of this directory is a reverse-engineering journal in chronological order, documenting why the SDK is shaped the way it is and how to extend it.
 
 ---
 
 ## Reading paths
 
 ### "I want to write a mod"
-1. [MODDING_GUIDE.md](MODDING_GUIDE.md) — installation, examples,
-   full Lua API reference.
-2. The `custom/lua/examples/` directory in your install — copy-paste
-   starters numbered `01_hello.lua` through `07_runtime_triggers.lua`.
+1. [MODDING_GUIDE.md](MODDING_GUIDE.md) — installation, examples, full Lua API reference.
+2. The `custom/lua/examples/` directory in your install — copy-paste starters numbered `01_hello.lua` through `07_runtime_triggers.lua`.
 3. [roadmap.md](roadmap.md) for what's planned next.
 
 ### "I want to understand how SacredSDK works"
-Skim these in order — they tell the story of the reverse engineering:
+Read in order:
 
 1. [01-exe-recon.md](01-exe-recon.md) — opening pass on Sacred.exe
-2. [07-proxy-experiment.md](07-proxy-experiment.md) — first in-process
-   foothold via the `ijl15.dll` proxy DLL slot
-3. [09-ghidra-and-encrypted-text.md](09-ghidra-and-encrypted-text.md)
-   — bypassing Sacred's `.text` encryption
-4. [16-interpreter.md](16-interpreter.md) — decoding Sacred's bytecode
-   interpreter (`FUN_00472bc0`)
-5. [21-custom-overrides.md](21-custom-overrides.md) — the `custom/`
-   directory + `CreateFileA` IAT hook that lets mods live without
-   touching vanilla
-6. [community-refs.md](community-refs.md) — what other community RE
-   projects have already mapped (massive cheat sheet)
-7. [roadmap.md](roadmap.md) — where we are on the staircase plan
+2. [07-proxy-experiment.md](07-proxy-experiment.md) — first in-process foothold via the `ijl15.dll` proxy DLL slot
+3. [09-ghidra-and-encrypted-text.md](09-ghidra-and-encrypted-text.md) — bypassing Sacred's `.text` encryption
+4. [16-interpreter.md](16-interpreter.md) — decoding Sacred's bytecode interpreter (`FUN_00472bc0`)
+5. [21-custom-overrides.md](21-custom-overrides.md) — the `custom/` directory + `CreateFileA` IAT hook that lets mods live without touching vanilla
+6. [community-refs.md](community-refs.md) — what other community RE projects have already mapped
+7. [roadmap.md](roadmap.md) — staircase status
 
 ### "I want to dig into a specific Sacred format"
 - **FunkCode bytecode**: [03](03-funkcode.md) (framing) →
@@ -60,7 +47,7 @@ Skim these in order — they tell the story of the reverse engineering:
 
 | File | One-line |
 |---|---|
-| [MODDING_GUIDE.md](MODDING_GUIDE.md) | **Modder-facing manual — read first.** |
+| [MODDING_GUIDE.md](MODDING_GUIDE.md) | Modder-facing manual — read first |
 | [01-exe-recon.md](01-exe-recon.md) | EXE sections, imports, strings, EP/DRM observation |
 | [02-balance-bin.md](02-balance-bin.md) | `bin/Balance.bin` schema draft; Veteran diff |
 | [03-funkcode.md](03-funkcode.md) | `bin/TYPE_NPC_*/FunkCode.bin` analysis |
@@ -83,8 +70,10 @@ Skim these in order — they tell the story of the reverse engineering:
 | [20-source-language.md](20-source-language.md) | Recovered FunkCode source-language grammar |
 | [21-custom-overrides.md](21-custom-overrides.md) | `custom/` override + CreateFileA IAT hook |
 | [22-source-mod-poc.md](22-source-mod-poc.md) | Path B: call Sacred's own compiler from our DLL |
-| [community-refs.md](community-refs.md) | Mined intel from community RE projects + wishlist |
-| [roadmap.md](roadmap.md) | Where we are on the staircase plan |
+| [23-npc-runtime.md](23-npc-runtime.md) | NPC runtime behaviour + community RE intel |
+| [24-storyline.md](24-storyline.md) | Storyline / quest-chain analysis |
+| [community-refs.md](community-refs.md) | Intel from community RE projects + wishlist |
+| [roadmap.md](roadmap.md) | Staircase status |
 | [TOOLS_PLAN.md](TOOLS_PLAN.md) | Curation plan for the Python `tools/` directory (next public push) |
 
 ---

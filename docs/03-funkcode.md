@@ -7,17 +7,17 @@ Two parallel sets exist:
 | Set | Path | Size | Per-class distinct? |
 |---|---|---|---|
 | Base | `bin\TYPE_NPC_<class>\FunkCode.bin` | ~3.96 MB | yes (slightly) |
-| Addon | `bin\Addon\TYPE_NPC_<class>\FunkCode.bin` | 2 504 248 B | **no — all 8 are byte-identical** (SHA `475a0361…`) |
+| Addon | `bin\Addon\TYPE_NPC_<class>\FunkCode.bin` | 2 504 248 B | no — all 8 byte-identical (SHA `475a0361…`) |
 
-Same byte-identity holds for `Addon\*\StartCode.bin` (`b838d0f5…`) and `Addon\*\Vectoren.bin` (`47800c5a…`). I.e. the Underworld content is loaded once and the per-class folder is just a lookup convenience.
+Same byte-identity holds for `Addon\*\StartCode.bin` (`b838d0f5…`) and `Addon\*\Vectoren.bin` (`47800c5a…`). The Underworld content is loaded once; the per-class folder is a lookup convenience.
 
 ## Framing
 
-Flat TLV stream, no nesting. **`[tag:u8][size:u16 BE][payload: size-3 bytes]`** repeated until EOF.
+Flat TLV stream, no nesting: `[tag:u8][size:u16 BE][payload: size-3 bytes]` repeated until EOF.
 
-SERAPHIM base parses cleanly into **125 055 records** that tile the entire 3 962 707 B file with zero leftover.
+SERAPHIM base parses cleanly into 125 055 records that tile the entire 3 962 707 B file with zero leftover.
 
-> Note: `size` is **big-endian** — my first parser used LE and the first "record" appeared to swallow 5888 bytes. The byte you see at +2 is the size LSB, +1 is always 0x00 (no record reaches 64 KB).
+`size` is **big-endian**. The byte at +2 is the size LSB, +1 is always 0x00 (no record reaches 64 KB).
 
 ## Top-level tag inventory (SERAPHIM base, 125 055 records)
 
@@ -41,7 +41,7 @@ SERAPHIM base parses cleanly into **125 055 records** that tile the entire 3 962
 | `0x68` | `h` | (in dump) | likely `hook`/`handle` |
 | `0x7d` | `}` | seen | sentinel block (`0x9F` + `0xFEEDBEEF` magic) |
 
-Distinct ASCII tag values seen: 70 (` ! # $ ) * + , . 0-9 : ; < > ? @ B C D E G H I J K L N O V W X Y Z [ \ ] ^ _ \` a c d g h i l m o p q s t u v w x y z { | } ~`). This is the size of the language's "node-kind alphabet".
+Distinct ASCII tag values seen: 70 (` ! # $ ) * + , . 0-9 : ; < > ? @ B C D E G H I J K L N O V W X Y Z [ \ ] ^ _ \` a c d g h i l m o p q s t u v w x y z { | } ~`) — the size of the language's node-kind alphabet.
 
 ## Decoded sample (first 0x300 bytes of SERAPHIM)
 
@@ -78,15 +78,15 @@ Distinct ASCII tag values seen: 70 (` ! # $ ) * + , . 0-9 : ; < > ? @ B C D E G 
 @ 0x2cb  <  size=25   ["res:1024", "trigger99"]
 ```
 
-### What this tells us
+### What this shows
 
-1. **It's a serialized symbol-table + bytecode tree, not raw bytecode.** Variable names (`dq_belohnung` = "daily-quest reward"), quest names (`HQ_3_1_4_glad_NPC_Auftrag…` = mainquest 3.1.4 gladiator NPC mission), labels (`RTYPE_NPC_GLADIATOR`), and resource refs (`res:1024`) all live in plain text.
-2. **Typed values.** A trailer `[0b XX XX XX XX]` looks like `(type=0x0b, u32 value)`. Records like `i / dq_belohnung_level / [0b min 0b max]` declare a **range-typed integer variable** — e.g. `dq_belohnung_level ∈ [0xb..0x14]`.
-3. **Control flow primitives** are obvious: `:` = label, `B` = block, `;` = end-of-stmt, `<`/`>` = open/close.
-4. **Quest content is here**: lines like `HQ_3_1_4_glad_NPC_Auftrag…` with `res:1024` + `ok_hq` are quest hooks tied to localized dialogue resources in `global.res`.
-5. **0x9F 0xFEEDBEEF sentinel** bookends some named blocks — a structural / debug fence we can use to locate things robustly.
+1. Serialized symbol-table + bytecode tree, not raw bytecode. Variable names (`dq_belohnung` = "daily-quest reward"), quest names (`HQ_3_1_4_glad_NPC_Auftrag…` = mainquest 3.1.4 gladiator NPC mission), labels (`RTYPE_NPC_GLADIATOR`), and resource refs (`res:1024`) all live in plain text.
+2. Typed values. A trailer `[0b XX XX XX XX]` is `(type=0x0b, u32 value)`. Records like `i / dq_belohnung_level / [0b min 0b max]` declare a range-typed integer variable (e.g. `dq_belohnung_level ∈ [0xb..0x14]`).
+3. Control-flow primitives: `:` = label, `B` = block, `;` = end-of-stmt, `<`/`>` = open/close.
+4. Quest content lives here: `HQ_3_1_4_glad_NPC_Auftrag…` with `res:1024` + `ok_hq` are quest hooks tied to localized dialogue resources in `global.res`.
+5. `0x9F 0xFEEDBEEF` sentinel bookends some named blocks — a structural/debug fence usable as a locator.
 
-> Implication: writing a *FunkCode → readable text* dumper is well within reach. A symmetric *text → FunkCode* re-serializer would give us a clean modding pipeline that does not require any EXE patching.
+A FunkCode → readable text dumper is reachable. A symmetric text → FunkCode re-serializer would give a modding pipeline that requires no EXE patching.
 
 ## Per-class divergent region
 
@@ -101,7 +101,7 @@ SERAPHIM vs GLADIATOR:
       GLADIATOR:  0x19F290 .. 0x1A1D49   (10 937 bytes)
 ```
 
-So **less than 0.3% of FunkCode.bin is class-specific**. The rest is shared global script content (overworld quests, NPCs, etc.) compiled into every class file.
+Less than 0.3% of FunkCode.bin is class-specific; the rest is shared global script content (overworld quests, NPCs) compiled into every class file.
 
 First 64 bytes of the per-class region:
 
@@ -115,7 +115,7 @@ GLADIATOR @ 0x19F290:
   → tag '.', size 0x1A, ref to "tptarget_g_01" (teleport target gladiator 01)
 ```
 
-Concrete content of the per-class slot: **class-specific quest log entries and class-specific teleport targets / trigger names**. Tiny but meaningful.
+Per-class slot content: class-specific quest log entries and class-specific teleport targets / trigger names.
 
 ## Hashes (base)
 
@@ -134,15 +134,13 @@ All 8 Addon variants: `475a0361…` (identical).
 
 ## Tooling
 
-- `sdk\tools\funkcode_walker.py` — TLV walker with the correct BE size parser. Dumps tag inventory, first 30 records, per-class divergence stats. Recursive mode disabled because top-level walk already covers 100% of the file (flat stream).
-- `sdk\tools\funkcode_v1.py` — first-pass profiler (sizes, longest common prefix/suffix between classes, byte histogram, ngram).
-- `sdk\tools\funkcode_decode_v1.py` — initial walker that incorrectly assumed LE size; kept for reference / debugging history.
+- `sdk\tools\funkcode_walker.py` — TLV walker with the correct BE size parser. Dumps tag inventory, first 30 records, per-class divergence stats. Recursive mode disabled (top-level walk covers 100% of the flat stream).
 
 ## Next probes
 
-1. **Build a tag→meaning table** by isolating every distinct tag, dumping 5 examples of each, and comparing their payload shapes. Currently we know `C/i/B/:/;/></}` etc. heuristically; we should make this rigorous.
-2. **Dump every record holding a `subtag=0x01 + cstr`** — produces a full symbol list. From the byte stats: tag `0x01` count = 6 093, very close to "number of named entities".
-3. **Walk the type tags** — `0x0b` is "u32 integer with value" so far. Find what `0x04`, `0x05`, `0x08`, `0x49`, `0x4e`, `0x4f`, `0x14` mean. Likely cover string-ref, float, bool, enum, list.
-4. **Cross-reference `res:1024` strings with `scripts\us\global.res`** — confirm the resource ID format and that quest names hook into localized text.
-5. **Try the simplest text mod**: change `dq_belohnung_level` max range from 0x32 (50) to something larger, rerun, see if any in-game quest reward level cap changes. This validates that FunkCode is read live (not just baked at install).
-6. **Decode the per-class 6 541-byte slot for each character** — this is the smallest, highest-leverage region for class-balance mods.
+1. Build a tag→meaning table: isolate every distinct tag, dump 5 examples of each, compare payload shapes. Current `C/i/B/:/;/></}` mappings are heuristic.
+2. Dump every record holding `subtag=0x01 + cstr` → full symbol list. Tag `0x01` count = 6 093, close to the number of named entities.
+3. Walk the type tags. `0x0b` = "u32 integer with value". Find what `0x04`, `0x05`, `0x08`, `0x49`, `0x4e`, `0x4f`, `0x14` mean — likely string-ref, float, bool, enum, list.
+4. Cross-reference `res:1024` strings with `scripts\us\global.res` — confirm resource ID format and that quest names hook into localized text.
+5. Simplest text mod: change `dq_belohnung_level` max range from 0x32 (50) to larger, rerun, check whether a quest reward level cap changes. Validates that FunkCode is read live (not baked at install).
+6. Decode the per-class 6 541-byte slot for each character — smallest, highest-leverage region for class-balance mods.

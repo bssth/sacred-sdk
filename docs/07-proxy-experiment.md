@@ -1,14 +1,14 @@
 # 07 — Experiment 1: `ijl15.dll` proxy
 
-First in-process foothold inside `Sacred.exe`. No EXE patching. Goal: prove that our own code runs inside the game's address space at startup.
+First in-process foothold inside `Sacred.exe`, no EXE patching. Goal: run our own code inside the game's address space at startup.
 
 ## Choice of host DLL
 
-| Candidate | Why considered | Verdict |
+| Candidate | Considered for | Verdict |
 |---|---|---|
-| `d3d9.dll` (from `Universal-D3D9-HOOK` template) | overlay-friendly, lots of public tooling | ❌ Sacred renders through **DirectDraw**, not D3D9. A `d3d9.dll` next to `Sacred.exe` is never loaded unless a DDraw→D3D9 wrapper (dgVoodoo2, DDrawCompat) is installed first. |
-| `ddraw.dll` | actually imported by Sacred (3 functions) | ⚠️ works, but `ddraw` is a system DLL — any mistake risks visual glitches or hard crashes. |
-| `ijl15.dll` (Intel JPEG) | 6 exports, **4 imported by ordinal 2..5** in `Sacred.exe`, third-party (sits next to the EXE), C-API, no graphics involvement | ✅ chosen |
+| `d3d9.dll` (from `Universal-D3D9-HOOK` template) | overlay-friendly, public tooling | Rejected. Sacred renders through DirectDraw, not D3D9. A `d3d9.dll` next to `Sacred.exe` is never loaded unless a DDraw→D3D9 wrapper (dgVoodoo2, DDrawCompat) is installed first. |
+| `ddraw.dll` | imported by Sacred (3 functions) | Works, but `ddraw` is a system DLL — mistakes risk visual glitches or crashes. |
+| `ijl15.dll` (Intel JPEG) | 6 exports, 4 imported by ordinal 2..5; third-party (sits next to the EXE); C-API; no graphics involvement | Chosen. |
 
 `pefile` confirms Sacred's IAT entry for ijl15:
 
@@ -53,11 +53,9 @@ Original `ijl15.dll` exports (verified with `pefile`):
                                           +------------------+
 ```
 
-The Windows PE loader handles forwarder strings transparently — when Sacred's IAT entry for ord-2 is resolved, the loader sees our proxy's `@2` is a forwarder pointing at `ijl15_real.ijlInit` and patches Sacred's IAT to the real function pointer directly. After resolution, calls into `ijlInit` don't even pass through our DLL.
+The Windows PE loader handles forwarder strings transparently: when Sacred's IAT entry for ord-2 is resolved, the loader sees our proxy's `@2` is a forwarder to `ijl15_real.ijlInit` and patches Sacred's IAT to the real function pointer directly. After resolution, calls into `ijlInit` don't pass through our DLL.
 
-The only code that runs in **our** DLL is `DllMain` on `DLL_PROCESS_ATTACH`. That callback fires once, before Sacred's entry point. After it, we keep memory but no JPEG call ever touches our code.
-
-That's exactly what we want for a bootstrap point — no behavioural change, just a foothold.
+The only code that runs in our DLL is `DllMain` on `DLL_PROCESS_ATTACH`, which fires once before Sacred's entry point. After that we keep memory but no JPEG call touches our code — a clean bootstrap point with no behavioural change.
 
 ## Implementation
 
@@ -69,13 +67,11 @@ Three files inside `sdk\SacredSDK\SacredSDK\`:
 | `SacredSDK.vcxproj` | configured so `Release|Win32` builds `ijl15.dll` (TargetName override) |
 | `proxy.def` | unused — kept as documentation of the export layout |
 
-Why `#pragma comment(linker, …)` instead of a `.def` file?
-
-The `.def` `EXPORTS name=otherdll.name @N` syntax compiles fine but the modern MSVC linker (v143) treats it as requiring a *local* symbol named `name` and emits `LNK2001` even though the right behaviour is a cross-DLL forwarder. `#pragma comment(linker, "/EXPORT:name=otherdll.name,@N")` produces the same forwarder entry in the export table without that local-symbol requirement.
+`#pragma comment(linker, …)` instead of a `.def` file because the `.def` `EXPORTS name=otherdll.name @N` syntax compiles but the modern MSVC linker (v143) treats it as requiring a local symbol named `name` and emits `LNK2001`. The `#pragma` produces the same forwarder entry without that local-symbol requirement.
 
 ## Bootstrap behaviour
 
-On `DLL_PROCESS_ATTACH`, `dllmain.cpp::greet` writes to `sdk\logs\sdk_loaded.log` (alongside `sdk\docs\`):
+On `DLL_PROCESS_ATTACH`, `dllmain.cpp::greet` writes to `sdk\logs\sdk_loaded.log`:
 
 ```
 [YYYY-MM-DD HH:MM:SS.mmm] === ijl15 proxy DllMain DLL_PROCESS_ATTACH ===
@@ -85,7 +81,7 @@ On `DLL_PROCESS_ATTACH`, `dllmain.cpp::greet` writes to `sdk\logs\sdk_loaded.log
 […] self base = 0xXXXXXXXX            ← module base for future hook offsets
 ```
 
-`DLL_THREAD_*` callbacks are disabled via `DisableThreadLibraryCalls` — we don't need them yet, and skipping them avoids unnecessary lock churn on every CreateThread Sacred makes.
+`DLL_THREAD_*` callbacks are disabled via `DisableThreadLibraryCalls` — not needed yet, and skipping them avoids lock churn on every CreateThread Sacred makes.
 
 ## Build (CLI)
 
@@ -95,7 +91,7 @@ On `DLL_PROCESS_ATTACH`, `dllmain.cpp::greet` writes to `sdk\logs\sdk_loaded.log
    -p:Configuration=Release -p:Platform=Win32
 ```
 
-Output: `sdk\Release\ijl15.dll` (currently ~127 KB).
+Output: `sdk\Release\ijl15.dll` (~127 KB).
 
 ## Deploy (one time)
 
@@ -115,7 +111,7 @@ State afterwards:
 | `ijl15.dll` | our proxy (~127 KB) |
 | `ijl15_real.dll` | original Intel JPEG library (~352 KB) |
 
-To roll back: delete `ijl15.dll`, rename `ijl15_real.dll` back to `ijl15.dll`. (Or just `copy /y ijl15_real.dll ijl15.dll` if you no longer need the backup.)
+Roll back: delete `ijl15.dll`, rename `ijl15_real.dll` back to `ijl15.dll` (or `copy /y ijl15_real.dll ijl15.dll`).
 
 ## Verify
 
@@ -123,7 +119,7 @@ To roll back: delete `ijl15.dll`, rename `ijl15_real.dll` back to `ijl15.dll`. (
 sdk\tools\smoke_test_proxy.bat
 ```
 
-This launches `Sacred.exe`, waits 4 seconds, kills it, and prints the resulting log. If the log appears with the expected lines, the proxy is live.
+Launches `Sacred.exe`, waits 4 seconds, kills it, prints the resulting log. If the log appears with the expected lines, the proxy is live.
 
 ## Failure modes & first-aid
 
@@ -131,17 +127,17 @@ This launches `Sacred.exe`, waits 4 seconds, kills it, and prints the resulting 
 |---|---|---|
 | Game crashes immediately on launch | `ijl15_real.dll` missing or wrong arch | Restore original, check backup |
 | No log file, but game starts and JPEGs render | DllMain ran but `sdk\logs\` path resolution failed | Check `GetModuleFileNameA` result; verify write permissions to install dir |
-| Log appears but cmdline shows the wrong exe | We were loaded into a different process (e.g. Steam launcher) | Check `exe = …` line; confirm it points at `Sacred.exe`/`Testapp.exe` |
+| Log appears but cmdline shows the wrong exe | Loaded into a different process (e.g. Steam launcher) | Check `exe = …` line; confirm it points at `Sacred.exe`/`Testapp.exe` |
 | Game starts but no JPEG loaders / textures broken | One of the 4 forwarders is wrong | Re-check ordinals in `dllmain.cpp` vs. the original DLL |
 
-## Why this is the right shape for future hooks
+## Capabilities once DllMain has run
 
-Once `DllMain` has run, we own the process. We can:
+We own the process and can:
 
 - spawn a worker thread (so we don't block PE-load) that:
   - waits for Sacred's main module to finish initializing (poll for `.text` page accessibility, or wait on a known import)
   - resolves Sacred's own functions by xref/pattern matching (Ghidra-derived offsets)
-  - installs MinHook / Detours patches there
+  - installs MinHook / Detours patches
 - install `SetWindowsHookEx`-style overlays
 - write a console + ReadFile poller for live config tweaking
 
@@ -151,11 +147,11 @@ All of that lives inside our codebase. Sacred.exe stays byte-identical on disk.
 
 | Step | State |
 |---|---|
-| Pick host DLL | ✅ `ijl15.dll` (ordinals 2..5) |
-| Forwarder DLL builds | ✅ 127 KB Win32 PE, all 6 exports forwarded |
-| Deploy + backup | ✅ swap done |
-| Smoke test | ✅ confirmed — game launches, log written |
-| Logs land in `sdk\logs\sdk_loaded.log` | ✅ both ATTACH and DETACH callbacks fire |
+| Pick host DLL | Done — `ijl15.dll` (ordinals 2..5) |
+| Forwarder DLL builds | Done — 127 KB Win32 PE, all 6 exports forwarded |
+| Deploy + backup | Done — swap done |
+| Smoke test | Done — game launches, log written |
+| Logs land in `sdk\logs\sdk_loaded.log` | Done — both ATTACH and DETACH callbacks fire |
 
 ## Confirmed observations from first live run
 
@@ -171,17 +167,17 @@ All of that lives inside our codebase. Sacred.exe stays byte-identical on disk.
 [2026-05-14 04:19:38.534] === DLL_PROCESS_DETACH (lpReserved=00000001) ===
 ```
 
-Three concrete facts established:
+Established:
 
-1. **Our DllMain runs inside `Sacred.exe`'s address space at PE load time.** ✅
-2. **JPEG forwarders work end-to-end** — the game would have crashed mid-startup on the first `ijlInit` if the export table or arch were wrong. ✅
-3. **Our DLL's own base address is ASLR-randomized** (`0x73A20000` vs `0x73910000`). Implication for code: any internal offsets must be computed from `GetModuleHandle(NULL)` / `&function` / our own DLL handle. **Sacred.exe itself** is a 2006 MSVC-6 binary with no `/DYNAMICBASE` flag, so its image base stays at `0x400000` across runs and Ghidra-derived offsets will remain stable.
-4. **`lpReserved=0x00000001` on DETACH** = the game truly exited (process termination, not DLL unload). Clean teardown path is available for future state save / file flushes.
+1. Our DllMain runs inside `Sacred.exe`'s address space at PE load time.
+2. JPEG forwarders work end-to-end — the game would have crashed mid-startup on the first `ijlInit` if the export table or arch were wrong.
+3. Our DLL's own base address is ASLR-randomized (`0x73A20000` vs `0x73910000`). Internal offsets must be computed from `GetModuleHandle(NULL)` / `&function` / our own DLL handle. `Sacred.exe` itself is a 2006 MSVC-6 binary with no `/DYNAMICBASE`, so its image base stays at `0x400000` across runs and Ghidra-derived offsets remain stable.
+4. `lpReserved=0x00000001` on DETACH = the game truly exited (process termination, not DLL unload). Clean teardown path available for future state save / file flushes.
 
 ## Next experiments (in order of leverage)
 
-1. **Confirm we see `CHEATS=1` in the cmdline log.** Cheap free win.
-2. **Print the loaded module list at attach time.** First step toward enumerating where Sacred's `.text` lives at runtime — confirms ImageBase from recon (`0x400000`).
-3. **Spawn a background thread that periodically writes `tick %lu`.** Proves we can run real work alongside Sacred.
-4. **First MinHook patch**: hook `CreateFileA` to log every file Sacred opens — gives us a behavioural trace without ProcMon.
-5. **Find and hook one Sacred function** by xref of a known string (e.g. the `Bin\Balance.bin` literal from recon).
+1. Confirm `CHEATS=1` shows in the cmdline log.
+2. Print the loaded module list at attach time — first step toward enumerating where Sacred's `.text` lives at runtime; confirms ImageBase `0x400000`.
+3. Spawn a background thread that periodically writes `tick %lu` — proves we can run real work alongside Sacred.
+4. First MinHook patch: hook `CreateFileA` to log every file Sacred opens — behavioural trace without ProcMon.
+5. Find and hook one Sacred function by xref of a known string (e.g. the `Bin\Balance.bin` literal from recon).

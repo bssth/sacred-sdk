@@ -1,9 +1,9 @@
 # `custom/` override layer
 
-A clean way to mod Sacred files without touching the Steam-verified install.
-The SDK DLL hooks `CreateFileA` at the IAT level: any read that would
-resolve to `<game_dir>\<sub>\<file>` is transparently re-pointed at
-`<game_dir>\custom\<sub>\<file>` if that override exists.
+Mods Sacred files without touching the Steam-verified install. The SDK DLL
+hooks `CreateFileA` at the IAT level: any read that would resolve to
+`<game_dir>\<sub>\<file>` is re-pointed at `<game_dir>\custom\<sub>\<file>`
+if that override exists.
 
 ```
 Sacred.exe                                Disk
@@ -13,18 +13,18 @@ Sacred.exe                                Disk
         └── else  pass through                        ──── NO  ── open vanilla
 ```
 
-## Why this layout
+## Rationale
 
-- **Steam-friendly**: vanilla files never change, so "Verify integrity" is
-  always green. Anything in `custom/` lives outside Steam's view.
-- **Format-agnostic**: works for `global.res`, `Balance.bin`,
+- Steam-friendly: vanilla files never change, so "Verify integrity" stays
+  green. `custom/` lives outside Steam's view.
+- Format-agnostic: works for `global.res`, `Balance.bin`,
   `bin/TYPE_NPC_*/FunkCode.bin`, `pak/*.pak`, anything Sacred opens via
   CreateFileA.
-- **Stackable**: future per-mod subdirectories or selectable mod profiles
-  are a small extension (`custom\<modname>\...` + priority list).
-- **Reversible**: delete the override, vanilla resumes on next launch.
+- Stackable: per-mod subdirectories or selectable mod profiles are a small
+  extension (`custom\<modname>\...` + priority list).
+- Reversible: delete the override, vanilla resumes on next launch.
 
-## How it works (one CreateFileA call)
+## Hook logic (one CreateFileA call)
 
 ```c
 HANDLE hook_CreateFileA(LPCSTR lpFileName, DWORD access, ...) {
@@ -42,27 +42,26 @@ HANDLE hook_CreateFileA(LPCSTR lpFileName, DWORD access, ...) {
 
 Guard rails:
 
-- ✅ Only redirects read opens (`GENERIC_READ`, `OPEN_EXISTING`/`OPEN_ALWAYS`).
-- ❌ Write opens (save games, logs) pass through untouched.
-- ❌ Top-level files (the EXE itself, DLLs) never redirected.
-- ❌ Paths outside the game dir.
-- ❌ `..\` escapes filtered (sandbox).
+- Redirects only read opens (`GENERIC_READ`, `OPEN_EXISTING`/`OPEN_ALWAYS`).
+- Write opens (save games, logs) pass through untouched.
+- Top-level files (the EXE itself, DLLs) never redirected.
+- Paths outside the game dir not redirected.
+- `..\` escapes filtered (sandbox).
 
-## Two redirection paths active
+## Two redirection paths
 
-There are now **two** layers in front of file reads, deliberately:
+Two layers sit in front of file reads, deliberately:
 
-1. **High-level Patch 1** (`patches.cpp`): the FUN_0080e680 detour that
-   loads `global.res` from disk in the first place. We already taught it
-   to check `custom/scripts/<lang>/global.res` first, then fall back to
-   the vanilla file.
-2. **Low-level CreateFileA hook** (`fs_override.cpp`): catches every OTHER
-   file Sacred opens. So `Balance.bin`, FunkCode `.bin` files, etc.,
-   all get the override path "for free".
+1. High-level Patch 1 (`patches.cpp`): the FUN_0080e680 detour that loads
+   `global.res` from disk. Taught to check `custom/scripts/<lang>/global.res`
+   first, then fall back to the vanilla file.
+2. Low-level CreateFileA hook (`fs_override.cpp`): catches every other file
+   Sacred opens, so `Balance.bin`, FunkCode `.bin` files, etc. get the
+   override path for free.
 
 The two are independent — Patch 1's chained-XOR resource-load can't be
-expressed as a simple file-open, so it needs its own check. Everything
-else takes the CreateFileA path.
+expressed as a simple file-open, so it needs its own check. Everything else
+takes the CreateFileA path.
 
 ## Examples
 
@@ -75,7 +74,7 @@ notepad ... custom\scripts\us\global.res     # via globalres_modify.py
 ```cmd
 :: Balance mod
 copy bin\Balance.bin custom\bin\Balance.bin
-:: edit Balance.bin (we have the schema in docs/02)
+:: edit Balance.bin (schema in docs/02)
 ```
 
 ```cmd
@@ -86,29 +85,29 @@ copy bin\TYPE_NPC_GLADIATOR\FunkCode.bin custom\bin\TYPE_NPC_GLADIATOR\FunkCode.
 
 ## Tooling integration
 
-- `sdk/tools/globalres_modify.py` writes its output to `custom/scripts/us/global.res`
-  by default. On first invocation it clones the vanilla file there so you
-  always start from a complete baseline. The vanilla file is never touched.
-- Future `funkcode_modify.py` / `balance_modify.py` will follow the same
+- `sdk/tools/globalres_modify.py` writes output to
+  `custom/scripts/us/global.res` by default. On first invocation it clones
+  the vanilla file there as a baseline. The vanilla file is never touched.
+- Future `funkcode_modify.py` / `balance_modify.py` follow the same
   convention: read vanilla, write `custom/...`.
 
-## Verification in the overlay
+## Overlay verification
 
-`Custom/ overrides` panel shows:
+The `Custom/ overrides` panel shows:
 
 - `CreateFileA opens` — total opens observed by the hook
-- `redirected` — how many actually hit a `custom\` file
+- `redirected` — how many hit a `custom\` file
 - `last` — the most recently redirected path
 
-Quick smoke test:
+Smoke test:
 
 ```cmd
 copy scripts\us\global.res custom\scripts\us\global.res
 :: launch Sacred
 ```
 
-Open the overlay. After Sacred reaches the main menu, `redirected` should
-be ≥ 1 with `last` showing `scripts\us\global.res -> custom\scripts\us\global.res`.
+After Sacred reaches the main menu, `redirected` should be ≥ 1 with `last`
+showing `scripts\us\global.res -> custom\scripts\us\global.res`.
 
 ## Files added
 

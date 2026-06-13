@@ -1,65 +1,65 @@
-# 23. Community RE goldmine — `Downloads/refs/` mined index
+# 23. Community RE reference — `Downloads/refs/` index
 
-Catalogue of everything three background agents extracted from
-`C:\Users\bssth\Downloads\refs\` during the 2026-05-14 session. Recorded
-here so the next /compact doesn't lose it — the original archives stay
-in Downloads, the extracted copies were in `%TEMP%\refs_extract\` and
-may be GC'd by Windows; refer to the **archive name** when re-mining.
+Catalogue of what was extracted from `C:\Users\bssth\Downloads\refs\`
+during the 2026-05-14 session. Original archives stay in Downloads;
+extracted copies were in `%TEMP%\refs_extract\` and may be GC'd by
+Windows. Refer to the archive name when re-mining.
 
-We did NOT integrate most of these yet. Each section below tags **status**:
+Most of these are not yet integrated. Each section tags status:
 
-- ✅ already in SacredSDK
-- 🟡 ready to integrate, not done
-- 📋 backlog (V2/V3)
+- Done — already in SacredSDK
+- Partial — partially integrated
+- Planned — ready to integrate, not done
+- Backlog — V2/V3
 
 ---
 
 ## A. Confirmed Sacred.exe addresses
 
-Image base `0x00400000`, no ASLR / no `.reloc` → VAs stable. Build:
-Steam 2006-10-13 (build 2.0.2.28).
+Image base `0x00400000`, no ASLR / no `.reloc`, so VAs are stable.
+Build: Steam 2006-10-13 (build 2.0.2.28).
 
 ### Already hooked / used by SDK
 
 | VA | Symbol | Purpose | Status |
 |---|---|---|---|
-| `0x0080E680` | global.res loader detour | patch1 — serves custom/scripts/<lang>/global.res | ✅ |
-| `0x00811440` | focus busy-wait | patch6 — stub returns TRUE | ✅ |
-| `0x0080E780` | `sacred_hash(name) → hash` | runtime_triggers hook (catches every res:NNNN/name resolve) | ✅ |
-| `0x0080EAF0` | dict lookup `(hash → ptr)` | text_logger trampoline | ✅ |
-| `0x004915A0` | `SelfTriggerQuest` (Subsys_24) | runtime_triggers hook (0 fires for dialogs; dormant) | ✅ |
-| `0x00491170` | `Dialog-Check` | runtime_triggers hook (0 fires for dialogs; dormant) | ✅ |
-| `0x00463240` | `fire trigger by name` funnel | runtime_triggers hook (0 fires; dormant) | ✅ |
-| `0x00808E50` | `cKernel::getSingleton(...)` | give_gold event-emit step 1 (cdecl, 3 ignored args, EAX=kernel) | ✅ |
-| `0x008092F0` | `cKernel::receive_event(...)` | give_gold event-emit step 2 (__thiscall, ret 0xC) | ✅ |
-| `0x00890B38` | event base vtable | static address used as `ev.vtable` for all engine events | ✅ |
-| `0x00472BC0` | FunkCode interpreter dispatch | analysed but not hooked | ✅ docs only |
-| `0x00475680` | outer FunkCode walker | analysed | ✅ docs only |
-| `0x00671AD0` | `cScriptCompiler::*::loadScriptedSequenceR` | Path B PoC compile (FUN_00671ad0) | partially ✅ |
-| `0x00671930` | cScriptCompiler sibling | partially ✅ |
-| `0x0066EF40` | debug-log printer (variadic) | sacred_log_mirror — currently disabled (install race) | 🟡 needs SuspendThread fix |
+| `0x0080E680` | global.res loader detour | patch1 — serves custom/scripts/<lang>/global.res | Done |
+| `0x00811440` | focus busy-wait | patch6 — stub returns TRUE | Done |
+| `0x0080E780` | `sacred_hash(name) → hash` | runtime_triggers hook (catches every res:NNNN/name resolve) | Done |
+| `0x0080EAF0` | dict lookup `(hash → ptr)` | text_logger trampoline | Done |
+| `0x004915A0` | `SelfTriggerQuest` (Subsys_24) | runtime_triggers hook (0 fires for dialogs; dormant) | Done |
+| `0x00491170` | `Dialog-Check` | runtime_triggers hook (0 fires for dialogs; dormant) | Done |
+| `0x00463240` | `fire trigger by name` funnel | runtime_triggers hook (0 fires; dormant) | Done |
+| `0x00808E50` | `cKernel::getSingleton(...)` | give_gold event-emit step 1 (cdecl, 3 ignored args, EAX=kernel) | Done |
+| `0x008092F0` | `cKernel::receive_event(...)` | give_gold event-emit step 2 (__thiscall, ret 0xC) | Done |
+| `0x00890B38` | event base vtable | static address used as `ev.vtable` for all engine events | Done |
+| `0x00472BC0` | FunkCode interpreter dispatch | analysed but not hooked | Done, docs only |
+| `0x00475680` | outer FunkCode walker | analysed | Done, docs only |
+| `0x00671AD0` | `cScriptCompiler::*::loadScriptedSequenceR` | Path B PoC compile (FUN_00671ad0) | Partial |
+| `0x00671930` | cScriptCompiler sibling | | Partial |
+| `0x0066EF40` | debug-log printer (variadic) | sacred_log_mirror — currently disabled (install race) | Planned, needs SuspendThread fix |
 
-### Found but NOT yet bound (V2 candidates)
+### Found but not yet bound (V2 candidates)
 
 | VA | Symbol | Purpose | Source | Status |
 |---|---|---|---|---|
-| `0x00669CA0` | `debug_output(const char*)` | NEW — alternative debug printer; simpler than 0x66EF40 | refs/Sacred_Modloader/Sacred 2.28 Beta.txt | 🟡 |
-| `0x0057FD80` | unknown helper, takes `int amount` | Called from gold pickup + interpreter AddGold case BEFORE event emit. Likely the floating-text spawner OR coin sound | Agent A recon | 📋 worth a runtime probe |
-| `0x0048DA40` | interpreter case 0x12 (AddGold) | full implementation of bytecode `AddGold N` | Agent A | ✅ docs |
-| `0x0048DD10` | interpreter case 0x13 | adjacent to 0x12 | Agent A | 📋 |
-| `0x0048F030` | interpreter case 0x14 | adjacent | Agent A | 📋 |
-| `0x004ACF40` | loot drop / pickup handler | emits same GOLD_CHANGE event as 0x12 | Agent A | 📋 |
-| `0x00558436` | sale completion | emits GOLD_CHANGE event | Agent A | 📋 |
-| `0x0080E000` | freed by Inoff Patch 2 | space available for custom shellcode | Inoff 2.30 Source | 📋 |
-| `0x0094DA7C` | ASCII `"HasItem:"` keyword | parsed by FunkCode parser at 0x00457306 | Agent A | 📋 — entry to runtime has-item |
-| `0x004987B0` | tag 0x3a IF-handler | implements `HasItem:N` runtime check | Agent A | 📋 — bag walker via this path |
-| `0x00451BE0` | FunkCode keyword→opcode table builder | maps `AddGold`/`Toete_NPC`/… to opcodes 0x50.. | Agent A | ✅ docs |
-| `0x00451BF6` | "AddGold" keyword entry | inside above table | Agent A | ✅ docs |
-| `0x00451F14` | opcode range start (0x50..) | inside above table | Agent A | ✅ docs |
-| `0x0057FD80` | `Toete_NPC` leaf (NOT gold) | writes `[esi+0x4D8]=0` (HP), calls death anim FUN_0054D760(0x169) | Agent A | 📋 — useful for "kill NPC" mod |
-| `0x0054D760` | death animation | takes anim id | Agent A | 📋 |
-| `0x005FE000` | `cObjectManager::getData(itemid)` | item resolve by id | Agent A | 📋 |
-| `0x004A15A0` | `cItem`-class handler (tag 0x4F) | reads `+0x1EC` (next-ptr) `+0x200` (flags) | Agent A | 📋 |
+| `0x00669CA0` | `debug_output(const char*)` | alternative debug printer; simpler than 0x66EF40 | refs/Sacred_Modloader/Sacred 2.28 Beta.txt | Planned |
+| `0x0057FD80` | unknown helper, takes `int amount` | Called from gold pickup + interpreter AddGold case before event emit. Likely the floating-text spawner or coin sound | Agent A recon | Backlog, worth a runtime probe |
+| `0x0048DA40` | interpreter case 0x12 (AddGold) | full implementation of bytecode `AddGold N` | Agent A | Done, docs |
+| `0x0048DD10` | interpreter case 0x13 | adjacent to 0x12 | Agent A | Backlog |
+| `0x0048F030` | interpreter case 0x14 | adjacent | Agent A | Backlog |
+| `0x004ACF40` | loot drop / pickup handler | emits same GOLD_CHANGE event as 0x12 | Agent A | Backlog |
+| `0x00558436` | sale completion | emits GOLD_CHANGE event | Agent A | Backlog |
+| `0x0080E000` | freed by Inoff Patch 2 | space available for custom shellcode | Inoff 2.30 Source | Backlog |
+| `0x0094DA7C` | ASCII `"HasItem:"` keyword | parsed by FunkCode parser at 0x00457306 | Agent A | Backlog, entry to runtime has-item |
+| `0x004987B0` | tag 0x3a IF-handler | implements `HasItem:N` runtime check | Agent A | Backlog, bag walker via this path |
+| `0x00451BE0` | FunkCode keyword→opcode table builder | maps `AddGold`/`Toete_NPC`/… to opcodes 0x50.. | Agent A | Done, docs |
+| `0x00451BF6` | "AddGold" keyword entry | inside above table | Agent A | Done, docs |
+| `0x00451F14` | opcode range start (0x50..) | inside above table | Agent A | Done, docs |
+| `0x0057FD80` | `Toete_NPC` leaf (NOT gold) | writes `[esi+0x4D8]=0` (HP), calls death anim FUN_0054D760(0x169) | Agent A | Backlog, useful for "kill NPC" mod |
+| `0x0054D760` | death animation | takes anim id | Agent A | Backlog |
+| `0x005FE000` | `cObjectManager::getData(itemid)` | item resolve by id | Agent A | Backlog |
+| `0x004A15A0` | `cItem`-class handler (tag 0x4F) | reads `+0x1EC` (next-ptr) `+0x200` (flags) | Agent A | Backlog |
 
 ### Inoff Patch 2.30 — 10 documented patches (Thorium)
 
@@ -69,20 +69,20 @@ Source files (read for full asm before/after):
 
 | # | Patch | VA(s) | Status |
 |---|---|---|---|
-| 1 | global.res from disk | varies | ✅ ours is patch1 |
-| 2 | cheat-code clean removal (frees `~0x80E000` for custom code) | `~0x80E000` | 📋 useful staging space |
-| 3 | Multi-Instancing (mutex bypass — run 2+ Sacred) | `0x848CC0`, `0x849014` | 📋 useful for testing co-op mods |
-| 4 | chat-crash fix | `0x4E1FB0` | 📋 |
-| 5 | version string change | `0xA28D80` | 📋 cosmetic |
-| 6 | debugger-freeze (focus busy-wait) | `~0x811440` | ✅ ours is patch6 |
-| 7 | WM_ACTIVATEAPP screen-clear off (NOP 2 bytes) | `0x812421`, `0x81243C` | 📋 cleaner windowed mode |
-| 8 | **DLL injection via entry-point hijack** | EP `0x84C704` → JMP `0x6156E4` → push `<dll>`, call `LoadLibraryA`, JMP `0x84C709` | 📋 **alternative to ijl15.dll proxy** |
-| 9 | console adjustment (drop error/version lines) | `0x6198B1`, `0x6198BB` | 📋 |
-| 10 | window border in windowed mode | `0x813309` | 📋 |
+| 1 | global.res from disk | varies | Done, ours is patch1 |
+| 2 | cheat-code clean removal (frees `~0x80E000` for custom code) | `~0x80E000` | Backlog, staging space |
+| 3 | Multi-Instancing (mutex bypass — run 2+ Sacred) | `0x848CC0`, `0x849014` | Backlog, for co-op mod testing |
+| 4 | chat-crash fix | `0x4E1FB0` | Backlog |
+| 5 | version string change | `0xA28D80` | Backlog, cosmetic |
+| 6 | debugger-freeze (focus busy-wait) | `~0x811440` | Done, ours is patch6 |
+| 7 | WM_ACTIVATEAPP screen-clear off (NOP 2 bytes) | `0x812421`, `0x81243C` | Backlog, cleaner windowed mode |
+| 8 | DLL injection via entry-point hijack | EP `0x84C704` → JMP `0x6156E4` → push `<dll>`, call `LoadLibraryA`, JMP `0x84C709` | Backlog, alternative to ijl15.dll proxy |
+| 9 | console adjustment (drop error/version lines) | `0x6198B1`, `0x6198BB` | Backlog |
+| 10 | window border in windowed mode | `0x813309` | Backlog |
 
 ---
 
-## B. Hero struct offsets (from chain endpoint `[+0x6D5C40]→+4→+4→+0x3AC`)
+## B. Hero struct offsets (chain endpoint `[+0x6D5C40]→+4→+4→+0x3AC`)
 
 Cross-verified across CT table, char.cpp (community), SacredGameTools shlib.
 
@@ -112,27 +112,26 @@ struct cCreature {  // chain endpoint
     /*+0x1E8*/  u32  wings;             // ┘
     // ...
     /*+0x3CC*/  u8   skill_ids[8];      // SkillType enum, see refs/Creature.pak_Editor
-    /*+0x3D4*/  u8   skill_levels[8];   // NEW (Agent B)
+    /*+0x3D4*/  u8   skill_levels[8];   // Agent B
     // ...
     /*+0x3EE*/  u32  gold;
     // ...
-    /*+0x4D4*/  u32  max_health;        // NEW (Agent B)
+    /*+0x4D4*/  u32  max_health;        // Agent B
     /*+0x4D8*/  i32  current_health;
 };
 ```
 
-**Unknown but very-likely**: backpack pointer / inline array. Located
-somewhere past `+0x500` per static-analysis frequency scan, but no
-community tool reads it live → needs **runtime trace** (x64dbg with
-hardware-write BP on `[hero+0x1E8]` (last equip slot) or `[hero+0x3EE]`
-(gold) while picking up an item; the caller VA of the inventory write
-points at the bag).
+Backpack pointer / inline array: unconfirmed. Located somewhere past
+`+0x500` per static-analysis frequency scan, but no community tool reads
+it live. Needs a runtime trace: x64dbg with hardware-write BP on
+`[hero+0x1E8]` (last equip slot) or `[hero+0x3EE]` (gold) while picking
+up an item; the caller VA of the inventory write points at the bag.
 
 ---
 
 ## C. PAX save-file format (offline read/write source)
 
-Magic + structure pulled from `SacredGameTools-main/shlib/Hero.cpp`,
+Magic + structure from `SacredGameTools-main/shlib/Hero.cpp`,
 `sacred_charmodif/classHero.pas`, `HeroDump_Quellcode/SacredHeroFile.cpp`
 (three independent confirmations).
 
@@ -143,11 +142,11 @@ Section table starts at file offset 0x100.
 Compression: zlib-deflate, marker = 0xBAADC0DE.
 ```
 
-Sections we care about:
+Sections:
 
 | Type | Name | Compressed | Notes |
 |---|---|---|---|
-| `0xC3` | SECTION_HEROATAGLANCE | yes | level/name/portrait for import menu; **CheatFlag @0x95** (`0x81` = cheats used) |
+| `0xC3` | SECTION_HEROATAGLANCE | yes | level/name/portrait for import menu; CheatFlag @0x95 (`0x81` = cheats used) |
 | `0xC4` | appearance | no (40 bytes exact) | AAGlance/portrait data |
 | `0xC7` | SECTION_HERO | yes | main hero data — full stat block, mirrors in-memory but with ~27-byte header shift |
 | `0xC8` | SECTION_INVENTORY | yes | items as `ItemRecord[]`; `0xFEEDF00D` magic = real item, `0xBAADF00D` = filler |
@@ -173,8 +172,8 @@ combat_arts_count u8         0x0483    0x04CB
 combat_arts_arr  22B/entry   0x0489    0x04D1
 ```
 
-(In-memory gold at `+0x3EE` is the same field at runtime, with ~`+0x1B`
-header shift over disk-layout `+0x3D3`.)
+In-memory gold at `+0x3EE` is the same field at runtime, with ~`+0x1B`
+header shift over disk-layout `+0x3D3`.
 
 ### Item record layout (inventory section 0xC8)
 
@@ -198,12 +197,12 @@ struct PlacementCell {                // 12 bytes
 };
 ```
 
-Slot colors (used by ST_ITEM_HEADER `usageid` fields):
+Slot colors (ST_ITEM_HEADER `usageid` fields):
 `0=none / 1=bronze / 2=silver / 3=gold / 4=green / 5=platinum`.
 
 ---
 
-## D. Catalogues / constants we can lift as Lua dictionaries
+## D. Catalogues / constants usable as Lua dictionaries
 
 ### Skill IDs (1..33)
 
@@ -257,9 +256,8 @@ Damage-vs-X / for-class / for-element. Full list in
 
 ## E. Networking (LAN multiplayer mod foundation)
 
-`refs/SacredGameTools-main/SacredFilter/` is a working **LAN proxy +
-scripting engine** in C++. Use it as a reference for any future
-networking-oriented SDK feature.
+`refs/SacredGameTools-main/SacredFilter/` is a working LAN proxy +
+scripting engine in C++. Reference for any future networking SDK feature.
 
 ### Sacred LAN UDP broadcast packet (decoded by `SacredAncariaConnection-main`)
 
@@ -297,9 +295,8 @@ In-game: Settings → Network → MODEM/ISDN sets retransmission mode.
 
 ## F. PAK file format internals (Resacred remake)
 
-`refs/Resacred-master/src/rs_file.h` + `rs_file.cpp` = **complete** spec
-of every `.pak` format with `static_assert(sizeof(...))`. Structures
-defined:
+`refs/Resacred-master/src/rs_file.h` + `rs_file.cpp` is a complete spec
+of every `.pak` format with `static_assert(sizeof(...))`. Structures:
 
 ```
 PakHeader        256B
@@ -323,11 +320,10 @@ Loaded by Sacred:
 - `Pak/mixed.pak` — texture atlas
 - `Pak/world/sectors.keyx` + `sectors.wldx` — world streaming index
 
-The **IDA databases** `refs/Resacred-master/ida_db/Sacred_2.idb` (~80 MB)
-and `Sacred_3.idb` (~88 MB) contain renamed functions from a prior RE
+IDA databases `refs/Resacred-master/ida_db/Sacred_2.idb` (~80 MB) and
+`Sacred_3.idb` (~88 MB) contain renamed functions from a prior RE
 session. Opening either in IDA Pro and exporting the symbol list would
-be the single biggest information gain available to us. **Highest
-priority for future session if anyone has IDA.**
+be a large information gain. Requires IDA.
 
 ---
 
@@ -348,32 +344,32 @@ infos: name(string), version(DWord), language(byte),
 TOC:   count(DWord) + N × (filename, offset, size)
 ```
 
-Useful if we want SacredSDK to import community mod packages.
+Reference for importing community mod packages into SacredSDK.
 
 ### Cheat Engine table (`Sacred (Public) 1.0.CT`)
 
-`refs/Sacred (Public) 1.0.CT` is XML — directly readable. Confirms our
+`refs/Sacred (Public) 1.0.CT` is XML, directly readable. Confirms the
 pointer chain (`[+0x6D5C40]→+4→+4→+0x3AC`) and has a 4096-byte structure
-dissect with auto-discovered fields (mostly unlabeled but useful as a
-heat-map of "this offset is populated").
+dissect with auto-discovered fields (mostly unlabeled, usable as a
+heat-map of which offsets are populated).
 
-Notable extra finding: `Sacred.exe+0x1500DF` is the "is combat-art slot
-N applicable to my class?" check (compare `ecx` against `0xA8`). Useful
-if we want class-aware CA dispatch.
+`Sacred.exe+0x1500DF` is the "is combat-art slot N applicable to my
+class?" check (compare `ecx` against `0xA8`). Usable for class-aware CA
+dispatch.
 
 ---
 
 ## H. Skipped (low value)
 
-Quickly inspected, nothing reusable:
+Inspected, nothing reusable:
 
 - `BHVS_*.zip` — hero vault, save-file UI only
-- `SacredMagician-master.zip` — Kotlin balance.bin editor (we already know that fmt)
+- `SacredMagician-master.zip` — Kotlin balance.bin editor (format already known)
 - `SacredUtils-master.zip` — C# launcher / settings configurator
 - `SacredUnderworldHelper-master.zip` — windowed-mode wrapper
 - `CheatersNightmare.7z` — binaries only, no sources
 - `process_analyser.zip` — binary only
-- `sacred_modding.zip` — Google Sheets HTML dumps; already have CSVs
+- `sacred_modding.zip` — Google Sheets HTML dumps; CSVs already held
 - `suac_recoded_127.zip` — account-manager binaries
 - `HeroChecker_0.9.9.0.zip`, `HeroCompare_*.zip`, `Sacred PaxFile Editor.7z`,
   `Char-Planer.zip`, `Charplaner*.zip` — save-file UI tools
@@ -386,50 +382,48 @@ Quickly inspected, nothing reusable:
 
 ---
 
-## I-pre. NEW DISCOVERY (2026-05-14 evening session): native banner system
+## I-pre. Native banner system (2026-05-14)
 
-`res:17631..17637` are **Sacred's NATIVE top-of-screen banner resource
-IDs**, NOT cutscene panels as I initially assumed. They're queried via
-sacred_hash whenever Sacred wants to show one of its built-in banners:
+`res:17631..17637` are Sacred's native top-of-screen banner resource
+IDs, not cutscene panels. Queried via sacred_hash whenever Sacred shows
+a built-in banner:
 
 - "Group eliminated" (after killing an enemy group)
 - "Quest completed" / "Quest failed"
 - The intro cutscene's 7 panels
 - Possibly other system events
 
-This means: instead of using our ImGui-rendered toast (`overlay::push_toast`),
-we could call Sacred's **native** banner-show function — gives us a
-visually-consistent feel with the rest of the engine (correct font,
-fade animation, position) and works on any resolution.
+Instead of the ImGui-rendered toast (`overlay::push_toast`), calling
+Sacred's native banner-show function would match the engine's font, fade
+animation, and position, and work on any resolution.
 
-The bytecode opcode that triggers a native banner is **tag 0x84
-`ShowJokeImage`** (from the FunkCode interpreter). Find its handler in
-`FUN_00475680 case 0x84` — that's `show_native_banner(res_id)` with
-high probability.
+The bytecode opcode that triggers a native banner is tag 0x84
+`ShowJokeImage` (FunkCode interpreter). Handler is in `FUN_00475680
+case 0x84`, likely `show_native_banner(res_id)`.
 
-If we can call that function with our own resource id (which we can
-register via T() → global.res), we get a native banner with custom text.
+Calling that function with a custom resource id (registerable via T() →
+global.res) yields a native banner with custom text.
 
-**Priority: V2 task.** Effort: ~30 min (locate handler + bind in
+Status: Planned (V2). Effort ~30 min (locate handler + bind in
 `sacred_show_banner`). Replaces the ImGui toast queue.
 
-## I-pre2. Quest book RE — NOT YET DONE (V2 task)
+## I-pre2. Quest book RE (Planned, V2)
 
 Setting an arbitrary qbit + emitting tag-0x35 QuestLogSet records does
-**not** create a new visible journal entry. Sacred has a separate
-quest book that registers each valid quest_id along with at minimum:
-- resource_prefix (the `NQ_<N>`/`HQ_<...>`/`DQ_<...>` naming scheme
-  used to look up Title/Header/Open/Sieg texts via global.res)
+not create a new visible journal entry. Sacred has a separate quest book
+that registers each valid quest_id along with at minimum:
+- resource_prefix (the `NQ_<N>`/`HQ_<...>`/`DQ_<...>` naming scheme used
+  to look up Title/Header/Open/Sieg texts via global.res)
 - class restriction (Sera/Glad/etc — quest 7615 "Scorpion Poison"
-  appears to be class-gated; setting its qbit on Sera doesn't open
-  the journal slot)
+  appears to be class-gated; setting its qbit on Sera doesn't open the
+  journal slot)
 
-Tested 2026-05-15 evening:
+Tested 2026-05-15:
 - Set qbit 9512 (made-up id) + bytecode-perfect tag-0x35 records → no
   visible journal entry. Confirms 9512 not in the registry.
-- Set qbit 7615 (vanilla quest "Scorpion Poison") + T.named override
-  of NQ_7615_LOG_TITLE/HEADER/OFFEN/SIEG → still no visible entry on
-  Sera. Suggests class-restriction in the registry.
+- Set qbit 7615 (vanilla quest "Scorpion Poison") + T.named override of
+  NQ_7615_LOG_TITLE/HEADER/OFFEN/SIEG → still no visible entry on Sera.
+  Suggests class-restriction in the registry.
 
 Path to RE:
 1. Find where Sacred reads the quest book during init. Candidates:
@@ -437,40 +431,39 @@ Path to RE:
    - Inside Balance.bin or a sibling
    - Compiled into Sacred.exe (static array)
 2. Once located, two approaches:
-   - Patch the registry at boot (extend with our entries before
-     Sacred reads it)
+   - Patch the registry at boot (extend with new entries before Sacred
+     reads it)
    - Provide a runtime Lua API that re-writes the in-memory registry
      after Sacred loads it
 
 Effort estimate: ~1-2 hour focused agent + decompile pass.
 
-**Until done**: brand-new visible quests not possible. Workable
-alternative is **reskin via T.named** (HQ_3_2_1 → "Lost Tome" works
-end-to-end), or chain off existing vanilla quest activation.
+Until done, brand-new visible quests are not possible. Alternative is
+reskin via T.named (HQ_3_2_1 → "Lost Tome" works end-to-end), or chain
+off existing vanilla quest activation.
 
-## I. Prioritised wishlist for future sessions
+## I. Wishlist for future sessions
 
 In rough effort-vs-impact order:
 
-1. **Open Resacred IDA databases** → export symbol list. ~1 hour with
-   IDA Pro. Single biggest source-of-truth for Sacred internals we
-   could possibly get.
-2. **Backpack walker via runtime trace** (x64dbg hw-write BP on
+1. Open Resacred IDA databases, export symbol list. ~1 hour with IDA
+   Pro. Largest source-of-truth for Sacred internals available.
+2. Backpack walker via runtime trace (x64dbg hw-write BP on
    `[hero+0x1E8]` while picking up an item). ~30 min. Unlocks
    `ctx:has_item` over full inventory + foundation for `ctx:give_item`.
-3. **Implement `ctx:hero_class()`, `:hero_level()`, `:experience()`,
-   `:skill_level(N)`, `:max_hp()`** — all reads, offsets already known.
+3. Implement `ctx:hero_class()`, `:hero_level()`, `:experience()`,
+   `:skill_level(N)`, `:max_hp()` — all reads, offsets already known.
    ~1 hour.
-4. **Sacred-native debug printer (FUN_00669CA0)** → mirror to sdk_log.
+4. Sacred-native debug printer (FUN_00669CA0) → mirror to sdk_log.
    Replaces the disabled sacred_log_mirror (FUN_0066ef40). ~1 hour.
-5. **Multi-Instancing patch** (Inoff Patch 3) → run two Sacreds for
-   co-op mod testing. ~1 hour.
-6. **PAX save SDK** — `sacred.read_save(path)` / `sacred.write_save(path, t)`
+5. Multi-Instancing patch (Inoff Patch 3) → run two Sacreds for co-op
+   mod testing. ~1 hour.
+6. PAX save SDK — `sacred.read_save(path)` / `sacred.write_save(path, t)`
    from Lua. Re-uses zlib already in Lua state via lua-zlib. ~1 day.
-7. **LAN message-relay hook** — bridge between mods on two LAN-connected
+7. LAN message-relay hook — bridge between mods on two LAN-connected
    Sacreds. Requires TINCAT2 reverse-engineering. ~1 week.
-8. **Move SDK injection to Inoff Patch 8 path** (EP-hijack) → no more
-   ijl15.dll proxy needed. ~half day. Optional polish.
+8. Move SDK injection to Inoff Patch 8 path (EP-hijack) → no more
+   ijl15.dll proxy needed. ~half day. Optional.
 
 ---
 
@@ -489,7 +482,7 @@ pip install py7zr   # for .7z
 python -c "import py7zr; py7zr.SevenZipFile(r'C:\Users\bssth\Downloads\refs\X.7z').extractall(r'C:\tmp\X')"
 ```
 
-Top-3 most-valuable archive paths:
+Most-referenced archive paths:
 - `C:\Users\bssth\Downloads\refs\Resacred-master.zip` (37 MB) — RE project + 2 IDA DBs
 - `C:\Users\bssth\Downloads\refs\SacredGameTools-main.zip` (848 KB) — save fmt + TCP networking
 - `C:\Users\bssth\Downloads\refs\Inoff_Sacred_Patch_Source.zip` (18 KB) — 10 EXE patches with asm
