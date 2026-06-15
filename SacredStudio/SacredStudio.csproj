@@ -1,0 +1,24 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <OutputType>WinExe</OutputType>
+        <TargetFramework>net9.0-windows</TargetFramework>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <UseWPF>true</UseWPF>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <!-- Sector grid map for the LOD8 terrain backdrop (the LOD8/LOD16 PNGs
+             are referenced from the viewer cache; only this small index ships). -->
+        <None Include="Assets\map\lod8_sectors.json" Condition="Exists('Assets\map\lod8_sectors.json')">
+            <Link>Assets\map\lod8_sectors.json</Link>
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </None>
+    </ItemGroup>
+
+    <ItemGroup>
+      <PackageReference Include="OpenTK.GLWpfControl" Version="4.3.3" />
+    </ItemGroup>
+
+</Project>

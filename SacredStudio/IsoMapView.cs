@@ -24,6 +24,17 @@ public sealed class IsoMapView : FrameworkElement
     private Point _lastMouse;
     private WorldTile _hover;
 
+    private readonly MapBackdrop _backdrop = new();
+    public bool ShowBackdrop { get; set; } = true;
+    public bool ShowGrid { get; set; } = true;
+    public bool HasBackdrop => _backdrop.Available;
+
+    // Exposed so the GL terrain renderer behind this overlay can mirror the camera
+    // (screen = iso*zoom + pan), keeping terrain aligned 1:1 with markers.
+    public double ZoomValue => _zoom;
+    public double PanXValue => _pan.X;
+    public double PanYValue => _pan.Y;
+
     public event Action<WorldTile, EditorTool>? TileClicked;
     public event Action<Placement>? PlacementPicked;
     public event Action<WorldTile>? HoverChanged;
@@ -34,9 +45,32 @@ public sealed class IsoMapView : FrameworkElement
     {
         Focusable = true;
         ClipToBounds = true;
-        Background = new SolidColorBrush(Color.FromRgb(20, 20, 25));
-        // Center the origin once we have a size.
-        Loaded += (_, _) => { _pan = new Vector(ActualWidth / 2, ActualHeight / 3); InvalidateVisual(); };
+        // Smooth (Fant) scaling for the terrain bitmaps — crisp when down-sampled,
+        // softly filtered rather than blocky when a tile is up-sampled.
+        RenderOptions.SetBitmapScalingMode(this, BitmapScalingMode.HighQuality);
+        Background = new SolidColorBrush(Color.FromRgb(18, 20, 28));
+        // First layout: frame the whole baked world if we have terrain, else
+        // just center the iso origin.
+        Loaded += (_, _) =>
+        {
+            if (_backdrop.Available) FitToMap();
+            else { _zoom = 0.5; FocusTile(new WorldTile(2080, 3500)); }   // land on a populated area
+        };
+    }
+
+    /// <summary>Frame the whole baked terrain (used on load + the "Fit map" button).</summary>
+    public void FitToMap()
+    {
+        if (ActualWidth <= 0 || ActualHeight <= 0) return;
+        if (!_backdrop.TryGetIsoBounds(out double x0, out double y0, out double x1, out double y1))
+        {
+            _zoom = 0.5; FocusTile(new WorldTile(2080, 3500)); return;   // no backdrop → populated area
+        }
+        double w = x1 - x0, h = y1 - y0;
+        _zoom = Math.Clamp(Math.Min(ActualWidth / w, ActualHeight / h) * 0.94, 0.0008, 8.0);
+        double cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+        _pan = new Vector(ActualWidth / 2 - cx * _zoom, ActualHeight / 2 - cy * _zoom);
+        InvalidateVisual();
     }
 
     public Brush Background { get; set; }
@@ -53,6 +87,16 @@ public sealed class IsoMapView : FrameworkElement
     public void SetSelected(Placement? p)
     {
         _selected = p;
+        InvalidateVisual();
+    }
+
+    /// <summary>Debug: jump to a zoom level centered on a world tile (env-gated harness).</summary>
+    public void DebugView(double zoom, int wx, int wy)
+    {
+        if (ActualWidth <= 0 || ActualHeight <= 0) return;
+        _zoom = Math.Clamp(zoom, 0.02, 8.0);
+        var iso = IsoProjection.WorldToIso(new WorldTile(wx, wy));
+        _pan = new Vector(ActualWidth / 2 - iso.X * _zoom, ActualHeight / 2 - iso.Y * _zoom);
         InvalidateVisual();
     }
 
@@ -175,9 +219,84 @@ public sealed class IsoMapView : FrameworkElement
     protected override void OnRender(DrawingContext dc)
     {
         dc.DrawRectangle(Background, null, new Rect(0, 0, ActualWidth, ActualHeight));
-        DrawGrid(dc);
+        DrawBackdrop(dc);
+        if (ShowGrid) DrawGrid(dc);
         DrawPlacements(dc);
         DrawHover(dc);
+    }
+
+    // Below this zoom the LOD16 overview is still down-sampled (crisp); above it
+    // LOD16 starts upscaling, so switch to the 2×-finer LOD8 per-sector images.
+    private const double Lod8ZoomThreshold = 0.06;
+
+    /// <summary>
+    /// Draw the baked terrain under the grid, picking the level of detail from
+    /// zoom: LOD16 overview chunks when far, LOD8 per-sector images when close.
+    /// Only tiles intersecting the viewport are loaded/drawn (cull + bitmap cache).
+    /// </summary>
+    // At/above this zoom the native GL terrain layer (behind this overlay) takes
+    // over with full game-fidelity tiles; the baked-LOD images only cover the far
+    // overview (where GL would need too many sectors/VRAM).
+    public const double GlTerrainZoom = 0.04;
+
+    private void DrawBackdrop(DrawingContext dc)
+    {
+        if (!ShowBackdrop || !_backdrop.Available) return;
+        if (_zoom >= GlTerrainZoom) return;           // GL terrain handles near zoom
+        if (_zoom >= Lod8ZoomThreshold && _backdrop.HasLod8) DrawLod8(dc);
+        else DrawLod16(dc);
+    }
+
+    private void DrawLod16(DrawingContext dc)
+    {
+        double s = MapBackdrop.ChunkIsoSize;
+        double ix0 = (0 - _pan.X) / _zoom, iy0 = (0 - _pan.Y) / _zoom;
+        double ix1 = (ActualWidth - _pan.X) / _zoom, iy1 = (ActualHeight - _pan.Y) / _zoom;
+        int cx0 = (int)Math.Floor(ix0 / s), cy0 = (int)Math.Floor(iy0 / s);
+        int cx1 = (int)Math.Floor(ix1 / s), cy1 = (int)Math.Floor(iy1 / s);
+        for (int cy = cy0; cy <= cy1; cy++)
+        for (int cx = cx0; cx <= cx1; cx++)
+        {
+            var bmp = _backdrop.GetChunk(cx, cy);
+            if (bmp is null) continue;
+            dc.DrawImage(bmp, new Rect(cx * s * _zoom + _pan.X, cy * s * _zoom + _pan.Y, s * _zoom, s * _zoom));
+        }
+    }
+
+    // LOD8: per-sector images. A sector at grid (gx,gy) has its nominal iso origin
+    // at ((gx-gy)*3072,(gx+gy)*1536); invert the viewport's iso corners to a grid
+    // range, then draw the available sectors back-to-front (by gx+gy depth).
+    private void DrawLod8(DrawingContext dc)
+    {
+        double ix0 = (0 - _pan.X) / _zoom, iy0 = (0 - _pan.Y) / _zoom;
+        double ix1 = (ActualWidth - _pan.X) / _zoom, iy1 = (ActualHeight - _pan.Y) / _zoom;
+        double gxMin = double.MaxValue, gxMax = double.MinValue, gyMin = double.MaxValue, gyMax = double.MinValue;
+        foreach (var (ix, iy) in new[] { (ix0, iy0), (ix1, iy0), (ix0, iy1), (ix1, iy1) })
+        {
+            double a = ix / 3072.0, b = iy / 1536.0;     // a = gx-gy, b = gx+gy
+            double gx = (a + b) / 2, gy = (b - a) / 2;
+            gxMin = Math.Min(gxMin, gx); gxMax = Math.Max(gxMax, gx);
+            gyMin = Math.Min(gyMin, gy); gyMax = Math.Max(gyMax, gy);
+        }
+        int gx0 = (int)Math.Floor(gxMin) - 2, gx1 = (int)Math.Ceiling(gxMax) + 2;
+        int gy0 = (int)Math.Floor(gyMin) - 2, gy1 = (int)Math.Ceiling(gyMax) + 2;
+        if ((long)(gx1 - gx0) * (gy1 - gy0) > 12000) { DrawLod16(dc); return; }
+
+        var vis = new List<(int gx, int gy)>();
+        for (int gy = gy0; gy <= gy1; gy++)
+        for (int gx = gx0; gx <= gx1; gx++)
+            if (_backdrop.HasSector(gx, gy)) vis.Add((gx, gy));
+        vis.Sort((p, q) => (p.gx + p.gy).CompareTo(q.gx + q.gy));   // back-to-front
+
+        foreach (var (gx, gy) in vis)
+        {
+            var bmp = _backdrop.GetSector(gx, gy);
+            if (bmp is null) continue;
+            var (ox, oy) = MapBackdrop.SectorIsoOrigin(gx, gy);
+            double isoW = bmp.PixelWidth * MapBackdrop.Lod8Factor;
+            double isoH = bmp.PixelHeight * MapBackdrop.Lod8Factor;
+            dc.DrawImage(bmp, new Rect(ox * _zoom + _pan.X, oy * _zoom + _pan.Y, isoW * _zoom, isoH * _zoom));
+        }
     }
 
     private static readonly Pen GridPen = MakePen(Color.FromArgb(40, 120, 120, 160), 1);

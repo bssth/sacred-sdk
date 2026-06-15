@@ -2,7 +2,9 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
 using Microsoft.Win32;
+using OpenTK.Wpf;
 using SacredStudio.CodeGen;
 using SacredStudio.Io;
 using SacredStudio.Model;
@@ -12,10 +14,69 @@ namespace SacredStudio;
 public partial class MainWindow : Window
 {
     private readonly AppState _state = new();
+    private readonly GlTerrainRenderer _glr = new();
+    private readonly System.Diagnostics.Stopwatch _fpsSw = System.Diagnostics.Stopwatch.StartNew();
+    private int _fpsFrames;
+    private bool _dbgLock; private double _dbgZoom; private int _dbgWx, _dbgWy;
 
     public MainWindow()
     {
         InitializeComponent();
+
+        // GL terrain layer (under the transparent IsoMapView marker overlay).
+        Map.Background = Brushes.Transparent;   // hit-testable but lets GL show through
+        Map.ShowBackdrop = true;                // baked LOD covers FAR overview; GL takes near zoom
+        Gl.Ready += _glr.Ready;
+        Gl.Render += _ =>
+        {
+            _glr.ViewW = Gl.ActualWidth;
+            _glr.ViewH = Gl.ActualHeight;
+            if (_dbgLock)
+            {
+                // Debug harness: lock the GL view to a fixed zoom/center (immune to any
+                // stray wheel drift), so screenshots are reproducible.
+                double ix = (_dbgWx - _dbgWy) * 48.0, iy = (_dbgWx + _dbgWy) * 24.0;
+                _glr.Zoom = _dbgZoom;
+                _glr.PanX = Gl.ActualWidth / 2 - ix * _dbgZoom;
+                _glr.PanY = Gl.ActualHeight / 2 - iy * _dbgZoom;
+            }
+            else
+            {
+                _glr.Zoom = Map.ZoomValue;
+                _glr.PanX = Map.PanXValue;
+                _glr.PanY = Map.PanYValue;
+            }
+            _glr.Render();
+
+            // Lightweight FPS HUD (verifies the streaming fix at a glance).
+            _fpsFrames++;
+            if (_fpsSw.Elapsed.TotalSeconds >= 0.5)
+            {
+                double fps = _fpsFrames / _fpsSw.Elapsed.TotalSeconds;
+                _fpsFrames = 0; _fpsSw.Restart();
+                StatusMap.Text = $"GL {fps:0} fps · sheets {_glr.ResidentSheets} · z={Map.ZoomValue:0.000}";
+            }
+        };
+        Gl.Start(new GLWpfControlSettings { MajorVersion = 3, MinorVersion = 3 });
+
+        // Debug harness: SS_ZOOM=<z> jumps to that zoom centered on a known populated
+        // tile right after layout, so a screenshot can inspect a fixed view.
+        var dbgZoom = Environment.GetEnvironmentVariable("SS_ZOOM");
+        if (dbgZoom is not null &&
+            double.TryParse(dbgZoom, System.Globalization.NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture, out double dz))
+        {
+            int twx = 2107, twy = 3548;
+            var dbgTile = Environment.GetEnvironmentVariable("SS_TILE");
+            if (dbgTile is not null)
+            {
+                var parts = dbgTile.Split(',');
+                if (parts.Length == 2 && int.TryParse(parts[0], out int px) && int.TryParse(parts[1], out int py))
+                { twx = px; twy = py; }
+            }
+            Map.Loaded += (_, _) => Map.DebugView(dz, twx, twy);
+            _dbgLock = true; _dbgZoom = dz; _dbgWx = twx; _dbgWy = twy;
+        }
 
         Map.Bind(_state.Placements);
         Map.TileClicked += OnMapTileClicked;
@@ -33,6 +94,7 @@ public partial class MainWindow : Window
         BindMetadata();
         UpdateCounts();
         Title = _state.WindowTitle;
+        StatusMap.Text = Map.HasBackdrop ? "map: terrain loaded" : "map: grid only (no baked terrain found)";
     }
 
     // ---- metadata two-way (manual; small + avoids INPC on project) -----------
@@ -101,6 +163,28 @@ public partial class MainWindow : Window
         {
             _state.Tool = tool;
             Map.Tool = tool;
+        }
+    }
+
+    // ---- map view controls -----------------------------------------------------
+
+    private void OnFitMap(object sender, RoutedEventArgs e) => Map.FitToMap();
+
+    private void OnToggleBackdrop(object sender, RoutedEventArgs e)
+    {
+        if (sender is System.Windows.Controls.Primitives.ToggleButton t)
+        {
+            Map.ShowBackdrop = t.IsChecked == true;
+            Map.InvalidateVisual();
+        }
+    }
+
+    private void OnToggleGrid(object sender, RoutedEventArgs e)
+    {
+        if (sender is System.Windows.Controls.Primitives.ToggleButton t)
+        {
+            Map.ShowGrid = t.IsChecked == true;
+            Map.InvalidateVisual();
         }
     }
 

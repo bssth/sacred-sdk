@@ -5,257 +5,407 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:SacredStudio"
         xmlns:model="clr-namespace:SacredStudio.Model"
+        xmlns:glwpf="clr-namespace:OpenTK.Wpf;assembly=GLWpfControl"
         xmlns:sys="clr-namespace:System;assembly=System.Runtime"
         mc:Ignorable="d"
-        Title="SacredStudio" Height="800" Width="1280"
-        Background="#1E1E23" Foreground="#E0E0E0">
+        Title="SacredStudio" Height="860" Width="1380"
+        Background="#0F1118" Foreground="#DDE1EA"
+        FontFamily="Segoe UI" TextOptions.TextFormattingMode="Display">
 
     <Window.Resources>
-        <!-- Enum value sources for combo boxes -->
-        <ObjectDataProvider x:Key="ArchetypeValues" MethodName="GetValues"
-                            ObjectType="{x:Type sys:Enum}">
+        <!-- ===================== palette ===================== -->
+        <Color x:Key="cAccent">#E0A93D</Color>
+        <SolidColorBrush x:Key="Bg"        Color="#0F1118"/>
+        <SolidColorBrush x:Key="Panel"     Color="#171A24"/>
+        <SolidColorBrush x:Key="PanelRaise" Color="#202535"/>
+        <SolidColorBrush x:Key="Border"    Color="#2C3243"/>
+        <SolidColorBrush x:Key="BorderSoft" Color="#222736"/>
+        <SolidColorBrush x:Key="Accent"    Color="#E0A93D"/>
+        <SolidColorBrush x:Key="AccentDim" Color="#7A5E22"/>
+        <SolidColorBrush x:Key="Teal"      Color="#4FB0E0"/>
+        <SolidColorBrush x:Key="Text"      Color="#DDE1EA"/>
+        <SolidColorBrush x:Key="TextMuted" Color="#8C93A6"/>
+
+        <ObjectDataProvider x:Key="ArchetypeValues" MethodName="GetValues" ObjectType="{x:Type sys:Enum}">
             <ObjectDataProvider.MethodParameters>
                 <x:Type TypeName="model:NpcArchetype"/>
             </ObjectDataProvider.MethodParameters>
         </ObjectDataProvider>
 
+        <!-- ===================== control styles ===================== -->
         <Style TargetType="TextBlock">
-            <Setter Property="Foreground" Value="#E0E0E0"/>
+            <Setter Property="Foreground" Value="{StaticResource Text}"/>
             <Setter Property="VerticalAlignment" Value="Center"/>
         </Style>
         <Style TargetType="Label">
-            <Setter Property="Foreground" Value="#B0B0B8"/>
-            <Setter Property="Padding" Value="0,4,0,1"/>
+            <Setter Property="Foreground" Value="{StaticResource TextMuted}"/>
+            <Setter Property="Padding" Value="0,5,0,1"/>
+            <Setter Property="FontSize" Value="11"/>
         </Style>
 
-        <!-- ===== property panels per placement kind (implicit DataTemplates) ===== -->
+        <Style TargetType="TextBox">
+            <Setter Property="Foreground" Value="{StaticResource Text}"/>
+            <Setter Property="CaretBrush" Value="{StaticResource Accent}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="6,3"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <Border x:Name="bd" CornerRadius="4" Background="#11141C"
+                                BorderBrush="{StaticResource Border}" BorderThickness="1">
+                            <ScrollViewer x:Name="PART_ContentHost" Margin="2,0" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Accent}"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="BorderBrush" Value="#3C455C"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="Button">
+            <Setter Property="Foreground" Value="{StaticResource Text}"/>
+            <Setter Property="Padding" Value="12,6"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bd" CornerRadius="5" Background="{StaticResource PanelRaise}"
+                                BorderBrush="{StaticResource Border}" BorderThickness="1">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="#2A3145"/>
+                                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Accent}"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="#161A24"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- tool / view toggle (RadioButton or CheckBox shown as a pill button) -->
+        <Style x:Key="PillToggle" TargetType="ToggleButton">
+            <Setter Property="Foreground" Value="{StaticResource TextMuted}"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border x:Name="bd" CornerRadius="5" Margin="2" Padding="0,6"
+                                Background="{StaticResource PanelRaise}" BorderBrush="{StaticResource Border}" BorderThickness="1">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="BorderBrush" Value="#3C455C"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="#3A2F12"/>
+                                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Accent}"/>
+                                <Setter Property="Foreground" Value="{StaticResource Accent}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style TargetType="CheckBox">
+            <Setter Property="Foreground" Value="{StaticResource Text}"/>
+            <Setter Property="Margin" Value="0,4,0,0"/>
+        </Style>
+
+        <Style TargetType="ListBox">
+            <Setter Property="Background" Value="#10131B"/>
+            <Setter Property="Foreground" Value="{StaticResource Text}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource Border}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+        </Style>
+        <Style TargetType="ListBoxItem">
+            <Setter Property="Padding" Value="6,4"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Border x:Name="bd" Background="Transparent" CornerRadius="3" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="#1C2230"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="#3A2F12"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="TabItem">
+            <Setter Property="Foreground" Value="{StaticResource TextMuted}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabItem">
+                        <Border x:Name="bd" BorderThickness="0,0,0,2" BorderBrush="Transparent" Padding="14,7" Margin="2,0,0,0">
+                            <ContentPresenter ContentSource="Header"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Foreground" Value="{StaticResource Text}"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Accent}"/>
+                                <Setter Property="Foreground" Value="{StaticResource Accent}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="SectionHead" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource TextMuted}"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Margin" Value="2,0,0,5"/>
+        </Style>
+        <Style x:Key="Card" TargetType="Border">
+            <Setter Property="Background" Value="{StaticResource Panel}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource BorderSoft}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="7"/>
+            <Setter Property="Padding" Value="9"/>
+            <Setter Property="Margin" Value="0,0,0,8"/>
+        </Style>
+
+        <!-- ===== property panels per placement kind ===== -->
         <DataTemplate DataType="{x:Type model:NpcPlacement}">
-            <StackPanel Margin="8">
+            <StackPanel Margin="2">
                 <Label Content="Name"/>
                 <TextBox Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"/>
                 <Grid Margin="0,4,0,0">
                     <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
-                    <StackPanel Grid.Column="0" Margin="0,0,4,0">
-                        <Label Content="World X"/>
-                        <TextBox Text="{Binding Wx, UpdateSourceTrigger=LostFocus}"/>
-                    </StackPanel>
-                    <StackPanel Grid.Column="1" Margin="4,0,0,0">
-                        <Label Content="World Y"/>
-                        <TextBox Text="{Binding Wy, UpdateSourceTrigger=LostFocus}"/>
-                    </StackPanel>
+                    <StackPanel Grid.Column="0" Margin="0,0,4,0"><Label Content="World X"/><TextBox Text="{Binding Wx, UpdateSourceTrigger=LostFocus}"/></StackPanel>
+                    <StackPanel Grid.Column="1" Margin="4,0,0,0"><Label Content="World Y"/><TextBox Text="{Binding Wy, UpdateSourceTrigger=LostFocus}"/></StackPanel>
                 </Grid>
                 <Label Content="Archetype"/>
-                <ComboBox ItemsSource="{Binding Source={StaticResource ArchetypeValues}}"
-                          SelectedItem="{Binding Archetype}"/>
+                <ComboBox ItemsSource="{Binding Source={StaticResource ArchetypeValues}}" SelectedItem="{Binding Archetype}"/>
                 <Grid Margin="0,4,0,0">
                     <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
-                    <StackPanel Grid.Column="0" Margin="0,0,4,0">
-                        <Label Content="NPC type id"/>
-                        <TextBox Text="{Binding NpcType, UpdateSourceTrigger=LostFocus}"/>
-                    </StackPanel>
-                    <StackPanel Grid.Column="1" Margin="4,0,0,0">
-                        <Label Content="Sub id"/>
-                        <TextBox Text="{Binding SubId, UpdateSourceTrigger=LostFocus}"/>
-                    </StackPanel>
+                    <StackPanel Grid.Column="0" Margin="0,0,4,0"><Label Content="NPC type id"/><TextBox Text="{Binding NpcType, UpdateSourceTrigger=LostFocus}"/></StackPanel>
+                    <StackPanel Grid.Column="1" Margin="4,0,0,0"><Label Content="Sub id"/><TextBox Text="{Binding SubId, UpdateSourceTrigger=LostFocus}"/></StackPanel>
                 </Grid>
                 <Label Content="NPC type name (optional, e.g. VALORIAN_SWORDSMAN)"/>
                 <TextBox Text="{Binding NpcTypeName, UpdateSourceTrigger=LostFocus}"/>
                 <Grid Margin="0,4,0,0">
                     <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
-                    <StackPanel Grid.Column="0" Margin="0,0,4,0">
-                        <Label Content="Stance class"/>
-                        <TextBox Text="{Binding StanceClass, UpdateSourceTrigger=LostFocus, TargetNullValue=''}"/>
-                    </StackPanel>
-                    <StackPanel Grid.Column="1" Margin="4,0,0,0">
-                        <Label Content="Stance matrix"/>
-                        <TextBox Text="{Binding StanceMatrix, UpdateSourceTrigger=LostFocus, TargetNullValue=''}"/>
-                    </StackPanel>
+                    <StackPanel Grid.Column="0" Margin="0,0,4,0"><Label Content="Stance class"/><TextBox Text="{Binding StanceClass, UpdateSourceTrigger=LostFocus, TargetNullValue=''}"/></StackPanel>
+                    <StackPanel Grid.Column="1" Margin="4,0,0,0"><Label Content="Stance matrix"/><TextBox Text="{Binding StanceMatrix, UpdateSourceTrigger=LostFocus, TargetNullValue=''}"/></StackPanel>
                 </Grid>
                 <Label Content="Level (optional)"/>
                 <TextBox Text="{Binding Level, UpdateSourceTrigger=LostFocus, TargetNullValue=''}"/>
-                <CheckBox Margin="0,8,0,0" Content="Quest giver" Foreground="#E0E0E0"
-                          IsChecked="{Binding QuestGiver}"/>
-                <CheckBox Margin="0,4,0,0" Content="Immortal" Foreground="#E0E0E0"
-                          IsChecked="{Binding Immortal}"/>
-                <CheckBox Margin="0,4,0,0" Content="Stationary" Foreground="#E0E0E0"
-                          IsChecked="{Binding Stationary}"/>
+                <CheckBox Content="Quest giver" IsChecked="{Binding QuestGiver}" Margin="0,8,0,0"/>
+                <CheckBox Content="Immortal" IsChecked="{Binding Immortal}"/>
+                <CheckBox Content="Stationary" IsChecked="{Binding Stationary}"/>
             </StackPanel>
         </DataTemplate>
 
         <DataTemplate DataType="{x:Type model:PointPlacement}">
-            <StackPanel Margin="8">
-                <Label Content="Name"/>
-                <TextBox Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"/>
+            <StackPanel Margin="2">
+                <Label Content="Name"/><TextBox Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"/>
                 <Grid Margin="0,4,0,0">
                     <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
-                    <StackPanel Grid.Column="0" Margin="0,0,4,0">
-                        <Label Content="World X"/>
-                        <TextBox Text="{Binding Wx, UpdateSourceTrigger=LostFocus}"/>
-                    </StackPanel>
-                    <StackPanel Grid.Column="1" Margin="4,0,0,0">
-                        <Label Content="World Y"/>
-                        <TextBox Text="{Binding Wy, UpdateSourceTrigger=LostFocus}"/>
-                    </StackPanel>
+                    <StackPanel Grid.Column="0" Margin="0,0,4,0"><Label Content="World X"/><TextBox Text="{Binding Wx, UpdateSourceTrigger=LostFocus}"/></StackPanel>
+                    <StackPanel Grid.Column="1" Margin="4,0,0,0"><Label Content="World Y"/><TextBox Text="{Binding Wy, UpdateSourceTrigger=LostFocus}"/></StackPanel>
                 </Grid>
             </StackPanel>
         </DataTemplate>
 
         <DataTemplate DataType="{x:Type model:ZonePlacement}">
-            <StackPanel Margin="8">
-                <Label Content="Name"/>
-                <TextBox Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"/>
+            <StackPanel Margin="2">
+                <Label Content="Name"/><TextBox Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"/>
                 <Grid Margin="0,4,0,0">
                     <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
-                    <StackPanel Grid.Column="0" Margin="0,0,4,0">
-                        <Label Content="World X"/>
-                        <TextBox Text="{Binding Wx, UpdateSourceTrigger=LostFocus}"/>
-                    </StackPanel>
-                    <StackPanel Grid.Column="1" Margin="4,0,0,0">
-                        <Label Content="World Y"/>
-                        <TextBox Text="{Binding Wy, UpdateSourceTrigger=LostFocus}"/>
-                    </StackPanel>
+                    <StackPanel Grid.Column="0" Margin="0,0,4,0"><Label Content="World X"/><TextBox Text="{Binding Wx, UpdateSourceTrigger=LostFocus}"/></StackPanel>
+                    <StackPanel Grid.Column="1" Margin="4,0,0,0"><Label Content="World Y"/><TextBox Text="{Binding Wy, UpdateSourceTrigger=LostFocus}"/></StackPanel>
                 </Grid>
                 <Grid Margin="0,4,0,0">
                     <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
-                    <StackPanel Grid.Column="0" Margin="0,0,4,0">
-                        <Label Content="Width (tiles)"/>
-                        <TextBox Text="{Binding W, UpdateSourceTrigger=LostFocus}"/>
-                    </StackPanel>
-                    <StackPanel Grid.Column="1" Margin="4,0,0,0">
-                        <Label Content="Height (tiles)"/>
-                        <TextBox Text="{Binding H, UpdateSourceTrigger=LostFocus}"/>
-                    </StackPanel>
+                    <StackPanel Grid.Column="0" Margin="0,0,4,0"><Label Content="Width (tiles)"/><TextBox Text="{Binding W, UpdateSourceTrigger=LostFocus}"/></StackPanel>
+                    <StackPanel Grid.Column="1" Margin="4,0,0,0"><Label Content="Height (tiles)"/><TextBox Text="{Binding H, UpdateSourceTrigger=LostFocus}"/></StackPanel>
                 </Grid>
             </StackPanel>
         </DataTemplate>
 
         <DataTemplate DataType="{x:Type model:ItemPlacement}">
-            <StackPanel Margin="8">
-                <Label Content="Name"/>
-                <TextBox Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"/>
+            <StackPanel Margin="2">
+                <Label Content="Name"/><TextBox Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"/>
                 <Grid Margin="0,4,0,0">
                     <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
-                    <StackPanel Grid.Column="0" Margin="0,0,4,0">
-                        <Label Content="World X"/>
-                        <TextBox Text="{Binding Wx, UpdateSourceTrigger=LostFocus}"/>
-                    </StackPanel>
-                    <StackPanel Grid.Column="1" Margin="4,0,0,0">
-                        <Label Content="World Y"/>
-                        <TextBox Text="{Binding Wy, UpdateSourceTrigger=LostFocus}"/>
-                    </StackPanel>
+                    <StackPanel Grid.Column="0" Margin="0,0,4,0"><Label Content="World X"/><TextBox Text="{Binding Wx, UpdateSourceTrigger=LostFocus}"/></StackPanel>
+                    <StackPanel Grid.Column="1" Margin="4,0,0,0"><Label Content="World Y"/><TextBox Text="{Binding Wy, UpdateSourceTrigger=LostFocus}"/></StackPanel>
                 </Grid>
-                <Label Content="Item type id"/>
-                <TextBox Text="{Binding ItemType, UpdateSourceTrigger=LostFocus}"/>
+                <Label Content="Item type id"/><TextBox Text="{Binding ItemType, UpdateSourceTrigger=LostFocus}"/>
                 <Label Content="Item type name (optional, e.g. WEAPON_SWORD)"/>
                 <TextBox Text="{Binding ItemTypeName, UpdateSourceTrigger=LostFocus}"/>
             </StackPanel>
         </DataTemplate>
     </Window.Resources>
 
-    <DockPanel>
-        <Menu DockPanel.Dock="Top" Background="#2A2A30" Foreground="#E0E0E0">
-            <MenuItem Header="_File" Foreground="#202020">
-                <MenuItem Header="_New" Click="OnNew"/>
-                <MenuItem Header="_Open…" Click="OnOpen"/>
-                <MenuItem Header="_Save" Click="OnSave"/>
-                <MenuItem Header="Save _As…" Click="OnSaveAs"/>
-                <Separator/>
-                <MenuItem Header="_Export init.lua…" Click="OnExportLua"/>
-                <Separator/>
-                <MenuItem Header="E_xit" Click="OnExit"/>
-            </MenuItem>
-            <MenuItem Header="_Edit" Foreground="#202020">
-                <MenuItem Header="_Delete selected" Click="OnDelete" InputGestureText="Del"/>
-            </MenuItem>
-        </Menu>
+    <DockPanel Background="{StaticResource Bg}">
 
-        <StatusBar DockPanel.Dock="Bottom" Background="#2A2A30" Foreground="#C0C0C0">
-            <StatusBarItem><TextBlock x:Name="StatusHover" Text="hover: —"/></StatusBarItem>
-            <Separator/>
-            <StatusBarItem><TextBlock x:Name="StatusTool" Text="tool: Select"/></StatusBarItem>
-            <Separator/>
-            <StatusBarItem><TextBlock x:Name="StatusCount" Text="0 placements"/></StatusBarItem>
-        </StatusBar>
+        <!-- ===================== title / header bar ===================== -->
+        <Border DockPanel.Dock="Top" Height="48" Background="#12141C" BorderBrush="{StaticResource BorderSoft}" BorderThickness="0,0,0,1">
+            <Grid Margin="14,0">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Border Width="26" Height="26" CornerRadius="6" Background="{StaticResource Accent}">
+                        <TextBlock Text="S" FontWeight="Bold" FontSize="16" Foreground="#1A130A"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <TextBlock Text="Sacred" FontSize="17" FontWeight="SemiBold" Margin="10,0,0,0" Foreground="{StaticResource Text}"/>
+                    <TextBlock Text="Studio" FontSize="17" FontWeight="Light" Foreground="{StaticResource Accent}"/>
+                    <Border Width="1" Height="22" Background="{StaticResource Border}" Margin="14,0"/>
+                    <TextBlock Text="World &amp; story editor" Foreground="{StaticResource TextMuted}" FontSize="12"/>
+                </StackPanel>
 
-        <Grid>
+                <!-- top-right action buttons -->
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                    <Button Content="New" Click="OnNew" Margin="0,0,6,0"/>
+                    <Button Content="Open…" Click="OnOpen" Margin="0,0,6,0"/>
+                    <Button Content="Save" Click="OnSave" Margin="0,0,6,0"/>
+                    <Button Content="Export Lua…" Click="OnExportLua"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- ===================== status bar ===================== -->
+        <Border DockPanel.Dock="Bottom" Height="26" Background="#12141C" BorderBrush="{StaticResource BorderSoft}" BorderThickness="0,1,0,0">
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0">
+                <TextBlock x:Name="StatusHover" Text="hover: —" Foreground="{StaticResource TextMuted}" FontSize="11"/>
+                <Border Width="1" Height="14" Background="{StaticResource Border}" Margin="12,0"/>
+                <TextBlock x:Name="StatusTool" Text="tool: Select" Foreground="{StaticResource TextMuted}" FontSize="11"/>
+                <Border Width="1" Height="14" Background="{StaticResource Border}" Margin="12,0"/>
+                <TextBlock x:Name="StatusCount" Text="0 placements" Foreground="{StaticResource TextMuted}" FontSize="11"/>
+                <Border Width="1" Height="14" Background="{StaticResource Border}" Margin="12,0"/>
+                <TextBlock x:Name="StatusMap" Text="map: —" Foreground="{StaticResource TextMuted}" FontSize="11"/>
+            </StackPanel>
+        </Border>
+
+        <!-- ===================== body ===================== -->
+        <Grid Margin="8">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="270"/>
-                <ColumnDefinition Width="5"/>
+                <ColumnDefinition Width="288"/>
+                <ColumnDefinition Width="6"/>
                 <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="5"/>
-                <ColumnDefinition Width="360"/>
+                <ColumnDefinition Width="6"/>
+                <ColumnDefinition Width="372"/>
             </Grid.ColumnDefinitions>
 
-            <!-- LEFT: tools + metadata + list -->
-            <DockPanel Grid.Column="0" Margin="6">
-                <TextBlock DockPanel.Dock="Top" Text="Tools" FontWeight="Bold" Margin="0,0,0,4"/>
-                <UniformGrid DockPanel.Dock="Top" Columns="5" Margin="0,0,0,8">
-                    <RadioButton x:Name="ToolSelect" Content="Sel" GroupName="tool" IsChecked="True"
-                                 Click="OnToolChanged" Tag="Select" Foreground="#E0E0E0"/>
-                    <RadioButton x:Name="ToolNpc" Content="NPC" GroupName="tool"
-                                 Click="OnToolChanged" Tag="Npc" Foreground="#E0E0E0"/>
-                    <RadioButton x:Name="ToolPoint" Content="Pt" GroupName="tool"
-                                 Click="OnToolChanged" Tag="Point" Foreground="#E0E0E0"/>
-                    <RadioButton x:Name="ToolZone" Content="Zone" GroupName="tool"
-                                 Click="OnToolChanged" Tag="Zone" Foreground="#E0E0E0"/>
-                    <RadioButton x:Name="ToolItem" Content="Item" GroupName="tool"
-                                 Click="OnToolChanged" Tag="Item" Foreground="#E0E0E0"/>
-                </UniformGrid>
+            <!-- LEFT -->
+            <DockPanel Grid.Column="0">
+                <Border DockPanel.Dock="Top" Style="{StaticResource Card}">
+                    <StackPanel>
+                        <TextBlock Text="TOOLS" Style="{StaticResource SectionHead}"/>
+                        <UniformGrid Columns="5">
+                            <RadioButton x:Name="ToolSelect" Content="Sel"  GroupName="tool" Style="{StaticResource PillToggle}" IsChecked="True" Click="OnToolChanged" Tag="Select"/>
+                            <RadioButton x:Name="ToolNpc"    Content="NPC"  GroupName="tool" Style="{StaticResource PillToggle}" Click="OnToolChanged" Tag="Npc"/>
+                            <RadioButton x:Name="ToolPoint"  Content="Pt"   GroupName="tool" Style="{StaticResource PillToggle}" Click="OnToolChanged" Tag="Point"/>
+                            <RadioButton x:Name="ToolZone"   Content="Zone" GroupName="tool" Style="{StaticResource PillToggle}" Click="OnToolChanged" Tag="Zone"/>
+                            <RadioButton x:Name="ToolItem"   Content="Item" GroupName="tool" Style="{StaticResource PillToggle}" Click="OnToolChanged" Tag="Item"/>
+                        </UniformGrid>
+                        <!-- legend -->
+                        <TextBlock Text="LEGEND" Style="{StaticResource SectionHead}" Margin="2,10,0,5"/>
+                        <UniformGrid Columns="2">
+                            <StackPanel Orientation="Horizontal" Margin="0,2"><Ellipse Width="10" Height="10" Fill="#50AAFF"/><TextBlock Text="NPC" Margin="6,0,0,0" FontSize="11" Foreground="{StaticResource TextMuted}"/></StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,2"><Rectangle Width="10" Height="10" Fill="#FFD246" RadiusX="2" RadiusY="2"/><TextBlock Text="Point" Margin="6,0,0,0" FontSize="11" Foreground="{StaticResource TextMuted}"/></StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,2"><Rectangle Width="10" Height="10" Fill="#5AC878"/><TextBlock Text="Zone" Margin="6,0,0,0" FontSize="11" Foreground="{StaticResource TextMuted}"/></StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,2"><Ellipse Width="10" Height="10" Fill="#DC78FF"/><TextBlock Text="Item" Margin="6,0,0,0" FontSize="11" Foreground="{StaticResource TextMuted}"/></StackPanel>
+                        </UniformGrid>
+                    </StackPanel>
+                </Border>
 
-                <TextBlock DockPanel.Dock="Top" Text="Project" FontWeight="Bold" Margin="0,0,0,4"/>
-                <Grid DockPanel.Dock="Top" Margin="0,0,0,8">
-                    <Grid.RowDefinitions>
-                        <RowDefinition/><RowDefinition/><RowDefinition/>
-                    </Grid.RowDefinitions>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="80"/><ColumnDefinition Width="*"/>
-                    </Grid.ColumnDefinitions>
-                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Mod name"/>
-                    <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TbModName" Margin="0,1"/>
-                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Target class"/>
-                    <TextBox   Grid.Row="1" Grid.Column="1" x:Name="TbTargetClass" Margin="0,1"/>
-                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Description"/>
-                    <TextBox   Grid.Row="2" Grid.Column="1" x:Name="TbDescription" Margin="0,1"
-                               AcceptsReturn="True" TextWrapping="Wrap" Height="40" VerticalScrollBarVisibility="Auto"/>
-                </Grid>
+                <Border DockPanel.Dock="Top" Style="{StaticResource Card}">
+                    <StackPanel>
+                        <TextBlock Text="PROJECT" Style="{StaticResource SectionHead}"/>
+                        <Grid>
+                            <Grid.RowDefinitions><RowDefinition/><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="84"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Mod name" Foreground="{StaticResource TextMuted}" FontSize="11"/>
+                            <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TbModName" Margin="0,2"/>
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Target class" Foreground="{StaticResource TextMuted}" FontSize="11"/>
+                            <TextBox   Grid.Row="1" Grid.Column="1" x:Name="TbTargetClass" Margin="0,2"/>
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Description" Foreground="{StaticResource TextMuted}" FontSize="11" VerticalAlignment="Top" Margin="0,4,0,0"/>
+                            <TextBox   Grid.Row="2" Grid.Column="1" x:Name="TbDescription" Margin="0,2"
+                                       AcceptsReturn="True" TextWrapping="Wrap" Height="44" VerticalScrollBarVisibility="Auto"/>
+                        </Grid>
+                    </StackPanel>
+                </Border>
 
-                <TextBlock DockPanel.Dock="Top" Text="Placements" FontWeight="Bold" Margin="0,0,0,4"/>
-                <ListBox x:Name="PlacementList" SelectionChanged="OnListSelectionChanged"
-                         Background="#26262C" Foreground="#E0E0E0" BorderBrush="#3A3A42">
-                    <ListBox.ItemTemplate>
-                        <DataTemplate>
-                            <TextBlock Text="{Binding Display}"/>
-                        </DataTemplate>
-                    </ListBox.ItemTemplate>
-                </ListBox>
+                <Border Style="{StaticResource Card}" Margin="0">
+                    <DockPanel>
+                        <TextBlock DockPanel.Dock="Top" Text="PLACEMENTS" Style="{StaticResource SectionHead}"/>
+                        <ListBox x:Name="PlacementList" SelectionChanged="OnListSelectionChanged" BorderThickness="0" Background="Transparent">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate><TextBlock Text="{Binding Display}"/></DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </DockPanel>
+                </Border>
             </DockPanel>
 
-            <GridSplitter Grid.Column="1" HorizontalAlignment="Stretch" Background="#3A3A42"/>
+            <GridSplitter Grid.Column="1" HorizontalAlignment="Stretch" Background="Transparent"/>
 
-            <!-- CENTER: map -->
-            <Border Grid.Column="2" BorderBrush="#3A3A42" BorderThickness="1">
-                <local:IsoMapView x:Name="Map"/>
+            <!-- CENTER: map + map toolbar -->
+            <Border Grid.Column="2" Style="{StaticResource Card}" Padding="0">
+                <DockPanel>
+                    <Border DockPanel.Dock="Top" Background="#12141C" BorderBrush="{StaticResource BorderSoft}" BorderThickness="0,0,0,1" CornerRadius="7,7,0,0">
+                        <StackPanel Orientation="Horizontal" Margin="8,5">
+                            <Button Content="Fit map" Click="OnFitMap" Padding="10,4"/>
+                            <ToggleButton x:Name="TgBackdrop" Content="Terrain" Style="{StaticResource PillToggle}" IsChecked="True" Click="OnToggleBackdrop" Padding="10,4" MinWidth="64"/>
+                            <ToggleButton x:Name="TgGrid" Content="Grid" Style="{StaticResource PillToggle}" IsChecked="True" Click="OnToggleGrid" Padding="10,4" MinWidth="56"/>
+                            <TextBlock Text="scroll = zoom · right-drag = pan · click = place/select"
+                                       Foreground="{StaticResource TextMuted}" FontSize="11" Margin="14,0,0,0"/>
+                        </StackPanel>
+                    </Border>
+                    <Grid>
+                        <glwpf:GLWpfControl x:Name="Gl"/>
+                        <local:IsoMapView x:Name="Map"/>
+                    </Grid>
+                </DockPanel>
             </Border>
 
-            <GridSplitter Grid.Column="3" HorizontalAlignment="Stretch" Background="#3A3A42"/>
+            <GridSplitter Grid.Column="3" HorizontalAlignment="Stretch" Background="Transparent"/>
 
-            <!-- RIGHT: properties + lua preview -->
-            <TabControl Grid.Column="4" Background="#1E1E23" Margin="2">
-                <TabItem Header="Properties">
-                    <ScrollViewer VerticalScrollBarVisibility="Auto">
-                        <ContentControl x:Name="PropertyHost"/>
-                    </ScrollViewer>
-                </TabItem>
-                <TabItem Header="Lua preview">
-                    <DockPanel>
-                        <Button DockPanel.Dock="Top" Content="Regenerate" Click="OnRegenerateLua" Margin="4"/>
-                        <TextBox x:Name="LuaPreview" IsReadOnly="True" FontFamily="Consolas"
-                                 Background="#16161A" Foreground="#D4D4D4"
-                                 VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
-                                 TextWrapping="NoWrap"/>
-                    </DockPanel>
-                </TabItem>
-            </TabControl>
+            <!-- RIGHT -->
+            <Border Grid.Column="4" Style="{StaticResource Card}" Padding="0">
+                <TabControl Background="Transparent" BorderThickness="0">
+                    <TabItem Header="Properties">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="10">
+                            <ContentControl x:Name="PropertyHost"/>
+                        </ScrollViewer>
+                    </TabItem>
+                    <TabItem Header="Lua preview">
+                        <DockPanel Margin="8">
+                            <Button DockPanel.Dock="Top" Content="Regenerate" Click="OnRegenerateLua" Margin="0,0,0,8" HorizontalAlignment="Left" Padding="14,5"/>
+                            <Border Style="{StaticResource Card}" Padding="0" Margin="0">
+                                <TextBox x:Name="LuaPreview" IsReadOnly="True" FontFamily="Cascadia Mono, Consolas"
+                                         Background="#0C0E14" Foreground="#C9D3B0" BorderThickness="0"
+                                         VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" TextWrapping="NoWrap"/>
+                            </Border>
+                        </DockPanel>
+                    </TabItem>
+                </TabControl>
+            </Border>
         </Grid>
     </DockPanel>
 </Window>

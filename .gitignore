@@ -59,6 +59,18 @@ __pycache__/
 *.pyo
 .pytest_cache/
 
+# Offline asset-prep scratch scripts (the product is pure C# — these are dev-only
+# reference tools that decode the game files; the editor decodes natively at runtime).
+SacredStudio/export_*.py
+
+# Throwaway debug screenshots / scratch dumps.
+SacredStudio/_*.png
+SacredStudio/_*.txt
+
+# Agent working memory / internal notes — not for the public repo.
+CLAUDE.md
+.claude/
+
 # OS noise
 Thumbs.db
 .DS_Store
