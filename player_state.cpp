@@ -360,17 +360,57 @@ bool npc_dismiss(int handle) {
 // skipped). Slot = first live entry (+0x14!=0); scanned, not guessed.
 typedef void (__thiscall* fn_roster_join)(void* c, int idx);  // 0x450C50
 
+// Read-only diagnostic: dump the quest-NPC roster array (qm+0x31c, stride 0x34)
+// so we can see whether ANY live entry exists and capture a vanilla entry's
+// 0x34-byte layout (needed to natively create our own entry). Pure reads.
+void roster_dump(const char* tag) {
+    HMODULE exe = g_attach.exe_module; if (!exe) return;
+    uintptr_t reb = reinterpret_cast<uintptr_t>(exe) - 0x00400000;
+    uintptr_t qm  = engine::singletons::qm(reb);
+    uintptr_t b = 0, e = 0, cap = 0;
+    bool okb = safe_read_ptr(qm + 0x31c, &b);
+    bool oke = safe_read_ptr(qm + 0x320, &e);
+    safe_read_ptr(qm + 0x324, &cap);
+    int cnt = (okb && oke && b && e >= b) ? (int)((e - b) / 0x34) : -1;
+    sdk_log("[roster-dump:%s] qm=%p +31c begin=%08X end=%08X cap=%08X count=%d",
+            tag, (void*)qm, (unsigned)b, (unsigned)e, (unsigned)cap, cnt);
+    if (cnt <= 0 || cnt > 4096) return;
+    __try {
+        for (int i = 0; i < cnt && i < 16; i++) {
+            uintptr_t en = b + (uintptr_t)i * 0x34;
+            uint32_t w[13];
+            for (int k = 0; k < 13; k++) safe_read<uint32_t>(en + k * 4, &w[k]);
+            uintptr_t vb = w[7], ve = w[8], vc = w[9];   // +0x1c/+0x20/+0x24
+            int members = (vb && ve >= vb) ? (int)((ve - vb) / 0x2c) : -1;
+            sdk_log("[roster-dump:%s] #%d @%08X live(+14)=%08X | +00=%08X +04=%08X "
+                    "+08=%08X +10=%08X | vec b=%08X e=%08X c=%08X members=%d",
+                    tag, i, (unsigned)en, w[5], w[0], w[1], w[2], w[4],
+                    (unsigned)vb, (unsigned)ve, (unsigned)vc, members);
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        sdk_log("[roster-dump:%s] faulted", tag);
+    }
+}
+
 bool npc_roster_add(int handle, int quest_id) {
     uintptr_t c = npc_creature(handle);
     if (!c) return false;
     HMODULE exe = g_attach.exe_module; if (!exe) return false;
     uintptr_t reb = reinterpret_cast<uintptr_t>(exe) - 0x00400000;
     uintptr_t qm  = engine::singletons::qm(reb);
+    roster_dump("add");                            // capture array state every add
     uintptr_t b = 0, e = 0;
-    if (!safe_read_ptr(qm + 0x31c, &b) || !b) return false;
+    if (!safe_read_ptr(qm + 0x31c, &b) || !b) {
+        sdk_log("[roster] h=%d ABORT: qm+0x31c array is NULL/empty (no quest-NPC "
+                "slot exists — needs native entry creation)", handle);
+        return false;
+    }
     if (!safe_read_ptr(qm + 0x320, &e) || e < b) return false;
     int cnt = (int)((e - b) / 0x34);
-    if (cnt <= 0 || cnt > 4096) return false;
+    if (cnt <= 0 || cnt > 4096) {
+        sdk_log("[roster] h=%d ABORT: array count=%d (empty)", handle, cnt);
+        return false;
+    }
     bool done = false;
     __try {
         for (int i = 0; i < cnt; i++) {
@@ -943,6 +983,20 @@ typedef uint32_t (__thiscall* fn_refkey)(void* cCreature); // 0x0044A1C0
 // Implemented in runtime_triggers.cpp (owns the FUN_00461540 pump hook).
 extern "C" void sdk_dlg_pump_register(uint32_t refKey, int handle,
                                       const char* name);
+// Arms the dialog-text source probe (read_name_hash logs the render call-site
+// resolving this id). Implemented in runtime_triggers.cpp.
+extern "C" void sdk_dlgres_probe_arm(uint32_t c10);
+// Registers {handle -> text hash} so the dialog driver can gate the FUN_0080f5e0
+// redirect to whichever bound NPC is talking. Implemented in runtime_triggers.cpp.
+extern "C" void sdk_dlg_text_register(int handle, uint32_t hash);
+// Watch a hash on the FINAL resolver FUN_0080eaf0 (text_logger.cpp): logs,
+// timestamped, whether the engine resolves OUR text hash while the dialog is open.
+extern "C" void text_logger_watch(uint32_t hash);
+// Arm the dialog redirect+capture on FUN_0080f5e0 (text_logger.cpp): for `ms`,
+// vanilla dialog SENTENCES fetched by the talk window are swapped for our text
+// hash (so the window renders OUR line natively), and every key->string is
+// logged. our_hash = sacred_hash(text_key).
+extern "C" void text_logger_arm_dialog(uint32_t our_hash, unsigned ms);
 
 // Arm a bound DlgNPC to speak AND wire the talk-route so the window
 // opens. handle = the NPC; dlg_name = the dlgnpc_bind name; text_key =
@@ -1008,8 +1062,44 @@ bool dialog_arm(int handle, const char* dlg_name, const char* text_key,
         unsigned h2 = sacred::engine::sacred_hash(res_key);
         bool g1 = engine_resolve::globalres_string(h1, u, (int)sizeof(u));
         sdk_log("[dlgtext-probe] hash('%s')=%08x -> %s", text_key, h1, g1 ? u : "(absent)");
+        // Arm the FINAL-resolver watch: catch (timestamped) whether the OPEN
+        // dialog window resolves THIS hash through FUN_0080eaf0.
+        text_logger_watch(h1);
+        // Register {handle -> our hash} for the driver-gated redirect: while THIS
+        // NPC's talk window is open, the dialog driver (FUN_0056B130) marks h1
+        // active and FUN_0080f5e0 swaps the vanilla sentence for our text. Robust
+        // to when the player opens the dialog (no time-from-arm expiry) and to
+        // multiple NPCs (each redirects to its own line).
+        sdk_dlg_text_register(handle, h1);
+        // Capture-only (logs what the window fetches; redirect is driver-gated).
+        text_logger_arm_dialog(h1, 20000);
         if (engine_resolve::globalres_string(h2, u, (int)sizeof(u)))
             sdk_log("[dlgtext-probe] hash('%s')=%08x -> %s", res_key, h2, u);
+
+        // ★ SOURCE-FIELD PROBE (read-only, zero-risk). dialog_store.md says the
+        // displayed line is resolved from creature+0x10 (→ FUN_006726f0 →
+        // FUN_0080e780 → sacred_hash → global.res). Resolve creature+0x10 (and
+        // +0xc) through the SAME resolver the renderer uses, so we SEE what the
+        // window currently shows ("murderer"?) without hooking anything. If +0x10
+        // resolves to the vanilla default, that's the field to redirect; if it
+        // doesn't, the render source is a different field and we need the BP.
+        uint32_t c10 = 0, c0c = 0;
+        if (safe_read<uint32_t>((uintptr_t)cre + 0x10, &c10)) {
+            bool gr = engine_resolve::globalres_string(c10, u, (int)sizeof(u));
+            sdk_log("[dlgtext-probe] creature+0x10=%08x -> %s", c10, gr ? u : "(no resolve)");
+            // Arm the render-callsite probe on this id (see read_name_hash). When
+            // the dialog window opens and shows "murderer", we capture WHO resolved
+            // it — pinning the field/call-site to redirect.
+            if (c10) sdk_dlgres_probe_arm(c10);
+        }
+        if (safe_read<uint32_t>((uintptr_t)cre + 0x0c, &c0c)) {
+            bool gr = engine_resolve::globalres_string(c0c, u, (int)sizeof(u));
+            sdk_log("[dlgtext-probe] creature+0x0c=%08x -> %s", c0c, gr ? u : "(no resolve)");
+        }
+        // What value WOULD make creature+0x10 show our text via the high-bit
+        // direct-global.res branch (FUN_0080eaf0): hash|0x80000000.
+        sdk_log("[dlgtext-probe] redirect candidate creature+0x10 := %08x (=hash('%s')|0x80000000)",
+                h1 | 0x80000000u, text_key);
     }
 
     // NAME-PRESERVE: the tag-03 walker clears the by-handle DlgNPC entry's +0x4c

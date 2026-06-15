@@ -63,6 +63,25 @@ volatile long g_seen_dialog_check  = 0;
 volatile long g_seen_funnel        = 0;
 volatile long g_seen_hash          = 0;
 
+// ── DIALOG-TEXT SOURCE PROBE (read-only) ────────────────────────────────────
+// dialog_arm sets g_dlgres_armed_c10 = the armed NPC's creature+0x10 value (the
+// id the renderer is suspected to resolve → "murderer"). read_name_hash (the
+// FUN_0080e780 hook) then logs every resolve of THAT id together with its CALLER
+// return address, pinning the render call-site. Capped to avoid flooding. Setting
+// it to 0 disarms. This reuses the existing FUN_0080e780 hook (no new detour).
+volatile uint32_t g_dlgres_armed_c10 = 0;
+volatile long     g_dlgres_logged    = 0;
+constexpr long    DLGRES_LOG_MAX      = 60;
+
+// Active dialog-text redirect hash. Set by sacred.dialog_redirect(hash) from
+// Lua on the npc_in_dialog RISING edge (o:on_talk) and cleared (0) on the
+// FALLING edge (o:on_talk_end) — so it stays armed for the WHOLE talk window
+// regardless of which frame the body string is fetched. text_logger's
+// FUN_0080f5e0 hook reads it via sdk_current_dialog_text_hash() and swaps the
+// vanilla dialog sentence for our text. (Replaces the fetch-time bit read, which
+// missed: the closing "Good luck" line is fetched as the talk bit is clearing.)
+volatile uint32_t g_redir_active_hash = 0;
+
 static lua_State* g_L         = nullptr;
 static char       g_status[256] = "(idle)";
 
@@ -1488,6 +1507,14 @@ static int l_sacred_npc_roster_remove(lua_State* L) {
         (int)luaL_checkinteger(L, 1)));
     return 1;
 }
+// sacred.roster_dump([tag]) -> nil. Read-only diagnostic: logs the qm+0x31c
+// quest-NPC array (count + each live entry's layout). Call near a VANILLA escort
+// NPC to capture a real entry layout for native roster-entry creation.
+static int l_sacred_roster_dump(lua_State* L) {
+    const char* tag = (lua_gettop(L) >= 1 && lua_isstring(L, 1)) ? lua_tostring(L, 1) : "manual";
+    sdk::player::roster_dump(tag);
+    return 0;
+}
 
 // sacred.npc_make_companion(handle) -> bool   (party-follow + fights)
 static int l_sacred_npc_make_companion(lua_State* L) {
@@ -1761,6 +1788,46 @@ static int l_sacred_npc_in_dialog(lua_State* L) {
     }
     lua_pushboolean(L, in_dlg);
     return 1;
+}
+
+// sacred.dialog_redirect(hash) — arm/disarm the native dialog-text redirect.
+// hash = sacred.hash(text_key) to arm; 0/nil to disarm. Called from o:on_talk /
+// o:on_talk_end so the redirect brackets the talk window. While armed,
+// text_logger's FUN_0080f5e0 hook swaps the engine's vanilla dialog sentence for
+// the global.res text baked under `hash`. Robust to fetch-frame timing (the bit
+// read at fetch-time missed the closing line).
+static int l_sacred_dialog_redirect(lua_State* L) {
+    lua_Integer h = (lua_gettop(L) >= 1 && lua_isnumber(L, 1)) ? lua_tointeger(L, 1) : 0;
+    uint32_t prev = g_redir_active_hash;
+    g_redir_active_hash = (uint32_t)(((uint32_t)h) & 0x7FFFFFFFu);
+    if (g_redir_active_hash != prev)
+        sdk_log("[dlgredir] %s hash=%08x", g_redir_active_hash ? "ARM" : "disarm",
+                g_redir_active_hash);
+    return 0;
+}
+
+// sacred.dialog_learn(hash) — called on the talk-CLOSE edge (o:on_talk_end). The
+// engine fetched the NPC's vanilla dialog line ~1ms before this fires; we map
+// that buffered key -> hash and persist it, so EVERY future fetch of that key
+// (this session and all later ones) shows our text. Implemented in text_logger.
+extern "C" void text_logger_learn(uint32_t hash);
+static int l_sacred_dialog_learn(lua_State* L) {
+    lua_Integer h = (lua_gettop(L) >= 1 && lua_isnumber(L, 1)) ? lua_tointeger(L, 1) : 0;
+    text_logger_learn((uint32_t)h);
+    return 0;
+}
+
+// sacred.dialog_override(vanilla_name, our_name) — NATIVE dialog-text override.
+// When the talk window resolves the engine's VANILLA dialog node `vanilla_name`
+// (e.g. "DQ_15024_OFFEN"), substitute OUR baked global.res name `our_name` (e.g.
+// "CAPMILES_GREET") so the window renders our text. Per-node, deterministic, no
+// timing. Discover vanilla names from the [dlgname] log. Implemented in text_logger.
+extern "C" void text_logger_dialog_override(const char* from, const char* to);
+static int l_sacred_dialog_override(lua_State* L) {
+    const char* from = luaL_checkstring(L, 1);
+    const char* to   = luaL_checkstring(L, 2);
+    text_logger_dialog_override(from, to);
+    return 0;
 }
 
 // sacred.trigger_table_dump([want_name]) -> count
@@ -2128,6 +2195,7 @@ void install_lua_api(lua_State* L) {
     lua_pushcfunction(L, l_sacred_dialog_clear);            lua_setfield(L, -2, "dialog_clear");
     lua_pushcfunction(L, l_sacred_npc_roster_add);          lua_setfield(L, -2, "npc_roster_add");
     lua_pushcfunction(L, l_sacred_npc_roster_remove);       lua_setfield(L, -2, "npc_roster_remove");
+    lua_pushcfunction(L, l_sacred_roster_dump);             lua_setfield(L, -2, "roster_dump");
     lua_pushcfunction(L, l_sacred_npc_make_companion);      lua_setfield(L, -2, "npc_make_companion");
     lua_pushcfunction(L, l_sacred_npc_dismiss);             lua_setfield(L, -2, "npc_dismiss");
     lua_pushcfunction(L, l_sacred_npc_despawn);             lua_setfield(L, -2, "npc_despawn");
@@ -2136,6 +2204,9 @@ void install_lua_api(lua_State* L) {
     lua_pushcfunction(L, l_sacred_npc_peek);                lua_setfield(L, -2, "npc_peek");
     lua_pushcfunction(L, l_sacred_trigger_table_dump);      lua_setfield(L, -2, "trigger_table_dump");
     lua_pushcfunction(L, l_sacred_npc_in_dialog);           lua_setfield(L, -2, "npc_in_dialog");
+    lua_pushcfunction(L, l_sacred_dialog_redirect);         lua_setfield(L, -2, "dialog_redirect");
+    lua_pushcfunction(L, l_sacred_dialog_learn);            lua_setfield(L, -2, "dialog_learn");
+    lua_pushcfunction(L, l_sacred_dialog_override);         lua_setfield(L, -2, "dialog_override");
     install_data_api(L);   // data/engine bindings live in lua_api_data.cpp (A5)
     lua_pushcfunction(L, l_sacred_arm_hwbp);                lua_setfield(L, -2, "arm_hwbp");
     lua_pushcfunction(L, l_sacred_npc_set_hp);              lua_setfield(L, -2, "npc_set_hp");
@@ -2788,11 +2859,25 @@ static bool name_looks_triggery(const char* s) {
 //   "Numeric ids pass through 0080e780's str(id)+hash path before reaching
 //    0080eaf0 unless their bit 31 is set."
 // So if arg looks small, it's a numeric id; format as decimal cstring.
-extern "C" void __cdecl read_name_hash(const char* arg_ptr) {
+extern "C" void __cdecl read_name_hash(const char* arg_ptr, uint32_t caller) {
     InterlockedIncrement(&g_thunk_hash);
 
     char   copy[128];
     uintptr_t v = (uintptr_t)arg_ptr;
+
+    // DIALOG-TEXT SOURCE PROBE: if armed, log every resolve of the armed NPC's
+    // creature+0x10 id together with the caller. The dialog-render call-site is
+    // the one we need to redirect; other call-sites (HUD/AI) resolve the same
+    // type id from different addresses, so the caller distinguishes them. This
+    // also proves the render goes THROUGH FUN_0080e780 (vs the high-bit direct
+    // FUN_0080eaf0 branch, which would bypass this hook entirely — telling us to
+    // look elsewhere). Pure logging, capped, SEH-free (no derefs of v here).
+    if (g_dlgres_armed_c10 && (uint32_t)v == g_dlgres_armed_c10 &&
+        g_dlgres_logged < DLGRES_LOG_MAX) {
+        InterlockedIncrement(&g_dlgres_logged);
+        sdk_log("[dlgrender] FUN_0080e780(id=%08x) caller=%08x  <== creature+0x10",
+                (unsigned)v, caller);
+    }
 
     if (v == 0) return;
 
@@ -3033,6 +3118,47 @@ extern "C" void sdk_dlg_pump_register(uint32_t refKey, int handle,
     e.name[k] = 0;
     sdk_log("[dlgreg] refKey=%08X h=%d name='%s' (n=%d)",
             refKey, handle, e.name, g_dlg_pump_n);
+}
+
+// Arm the dialog-text source probe (read_name_hash logs the render call-site
+// that resolves this id). Called by dialog_arm with the NPC's creature+0x10.
+// Resets the log counter so each fresh arm gets a clean capture window.
+extern "C" void sdk_dlgres_probe_arm(uint32_t c10) {
+    g_dlgres_logged    = 0;
+    g_dlgres_armed_c10 = c10;
+    sdk_log("[dlgrender] probe armed for creature+0x10=%08x (logging FUN_0080e780 callers)", c10);
+}
+
+// ── DIALOG-TEXT REDIRECT, gated by the live talk signal ─────────────────────
+// dialog_arm registers {handle -> our text hash} here. The redirect target is
+// resolved AT FETCH TIME in the FUN_0080f5e0 hook by asking which bound NPC is
+// in dialog RIGHT NOW — using the proven talk signal cCreature+0x200 bit 0x400
+// (sacred.npc_in_dialog; pulses 1 while the window is open, →0 on close). This
+// replaced two dead ends: a 20s-from-arm timer (expired before late talks →
+// Rocheford leaked vanilla) and gating on the FUN_0056B130 driver (it does NOT
+// tick for the modal "OK" talk window — proven: body fetched with no dlg56b for
+// that NPC). The talk bit is read exactly when the window fetches the body, so
+// it's robust to open-time and naturally per-NPC (only the talked-to NPC's bit
+// is set).
+struct DlgTextBind { int handle; uint32_t hash; };
+static DlgTextBind g_dlg_text_tab[32];
+static int         g_dlg_text_n = 0;
+
+extern "C" void sdk_dlg_text_register(int handle, uint32_t hash) {
+    for (int i = 0; i < g_dlg_text_n; i++)
+        if (g_dlg_text_tab[i].handle == handle) { g_dlg_text_tab[i].hash = hash; return; }
+    if (g_dlg_text_n >= 32) return;
+    g_dlg_text_tab[g_dlg_text_n].handle = handle;
+    g_dlg_text_tab[g_dlg_text_n].hash   = hash;
+    g_dlg_text_n++;
+    sdk_log("[dlgtext] registered h=%d hash=%08x (n=%d)", handle, hash, g_dlg_text_n);
+}
+
+// Returns the currently-armed dialog-text redirect hash (set by Lua's
+// o:on_talk / o:on_talk_end edges via sacred.dialog_redirect), or 0. Called per
+// FUN_0080f5e0 fetch — a single volatile read.
+extern "C" uint32_t sdk_current_dialog_text_hash(void) {
+    return g_redir_active_hash;
 }
 
 extern "C" void __cdecl read_dialog_pump(uintptr_t entry_esp) {
@@ -3472,16 +3598,21 @@ __declspec(naked) static void __cdecl hook_journal_build() {
 //   [esp+0] = return address (pushed by CALL)
 //   [esp+4] = const char* name
 // We save flags + EAX + ECX + EDX (4 dwords = 16 bytes) before pushing
-// the arg, so original [esp+4] is now at [esp+4+16] = [esp+20].
+// the args. After the saves: original return-addr (caller) is at [esp+16],
+// original [esp+4] (the id/name) is at [esp+20]. We pass BOTH to the cdecl
+// helper as (id, caller) — caller pins the dialog-render call-site during the
+// dialog-text source probe. Push right-to-left (caller first); the second push
+// shifts the id offset by 4 → [esp+24].
 __declspec(naked) static void __cdecl hook_sacred_hash() {
     __asm {
         pushfd
         push eax
         push ecx
         push edx
-        push dword ptr [esp+20]       ; arg = original [esp+4] = name pointer
+        push dword ptr [esp+16]       ; arg2 = caller (orig [esp+0] return addr)
+        push dword ptr [esp+24]       ; arg1 = id/name (orig [esp+4])
         call read_name_hash
-        add  esp, 4
+        add  esp, 8
         pop  edx
         pop  ecx
         pop  eax

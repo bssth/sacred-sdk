@@ -487,6 +487,7 @@ namespace player {
     bool dialog_clear(int handle);         // close dialog + clear "?!"
     bool npc_roster_add(int handle, int quest_id); // show in companion panel
     bool npc_roster_remove(int handle);            // remove from panel
+    void roster_dump(const char* tag);             // read-only: dump qm+0x31c array
     bool npc_make_companion(int handle);   // party-follow + fights for hero
     bool npc_dismiss(int handle);          // inverse of make_companion
     bool npc_despawn(int handle);          // clean engine removal (DelNPC)
