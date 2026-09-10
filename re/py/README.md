@@ -26,7 +26,9 @@ python -m pip install pefile
 
 Most scripts have absolute paths to `E:\SteamLibrary\steamapps\common\Sacred Gold\`
 baked in — edit `GAME` at the top of a script if your install lives
-elsewhere. (Future: env var override.)
+elsewhere. The quest toolchain no longer does: `funkcode_sources.py`
+derives the game root from its own location (`sdk/re/py` → three levels up)
+and honours the `SACRED_ROOT` and `SACRED_GLOBALRES` environment variables.
 
 ---
 
@@ -91,19 +93,36 @@ python tools\sacred_hash.py "HQ_3_2_1_Log_Title"
 
 | Script | Purpose |
 |---|---|
-| `quest_dump.py` | Dump readable quest cards (`HQ_/NQ_/RB_/DQ_` prefixes). Output: title, header, log entries, location. |
-| `quest_book.py` | Bulk-dump all 435 quests to a single Markdown file (~332 KB). |
+| `funkcode_sources.py` | **Corpus configuration** — every script directory (base per-class, base NetScript*, Addon per-class, Addon NetScript*) behind stable keys like `base:VAMPIRELADY` / `addon:NetScript`. Every quest tool takes `--sources <spec>`. |
+| `quest_dump.py` | Dump readable quest cards (`HQ_/NQ_/RB_/DQ_/GQ_/SQ_` prefixes). Output: title, header, log entries, location. |
+| `quest_book.py` | Bulk-dump all 435 base-campaign quests to a single Markdown file (~332 KB). |
 | `quest_script.py` | Extract per-quest bytecode in execution order — script trace from FunkCode. |
-| `quest_script_book.py` | Bulk variant of `quest_script.py` (~12.5 MB Markdown). |
+| `quest_script_book.py` | Bulk variant of `quest_script.py` (~5.4 MB Markdown). |
+| `quest_index.py` | **Canonical quest index** across the whole corpus (base + Addon + NetScript), with per-class payload hashing → `sdk/.claude/knowledge/quests/quest_index.{json,md}`. |
+| `quest_shards.py` | One tag-labelled record dump per quest → `sdk/.claude/knowledge/quests/shards/<campaign>/<id>.txt` (741 files, ~12 MB). |
 
 Examples:
 ```cmd
 :: A single quest
-python tools\quest_dump.py HQ_3_2_1
+python quest_dump.py HQ_3_2_1
 
-:: Whole game's quest text → one big Markdown
-python tools\quest_book.py -o quests-all.md
+:: The Underworld addon's own main quest, from the addon scripts
+python quest_dump.py   HQ_1_1 --sources all
+python quest_script.py HQ_1_1 --sources addon:SERAPHIM
+
+:: Rebuild the canonical index + every per-quest shard (~10 s)
+python quest_shards.py
+
+:: What the corpus actually contains (and which blobs are byte-identical)
+python funkcode_sources.py --md5
 ```
+
+`--sources` accepts `all`, `base`, `addon`, `classes`, `net`,
+`base-classes`, `addon-classes`, `base-net`, `addon-net`, `canonical`
+(one file per distinct blob), any key (`base:ZWERG`, `addon:NetScript`),
+and the legacy forms (`TYPE_NPC_ELVE`, `ELVE`) which still mean the base
+campaign. Omitting it keeps the historical behaviour (8 base class dirs).
+Format and regeneration of the shards: `sdk/.claude/knowledge/quests/shards/README.md`.
 
 ### Balance.bin
 
@@ -160,7 +179,8 @@ to understand what they're showing you.
 
 | Script | What it does |
 |---|---|
-| `quest_inventory.py` | Quest count breakdown across all 8 classes. |
+| `quest_inventory.py` | Quest-name pattern breakdown per source (`--sources all` for base + Addon + NetScript). |
+| `quest_index.py --families` | Raw evidence dump: every name family in the corpus with distinct-token counts per source. |
 
 ### Lua catalog generators
 

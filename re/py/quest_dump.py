@@ -30,7 +30,9 @@ try: sys.stdout.reconfigure(encoding="utf-8")
 except Exception: pass
 
 # --- global.res text lookup ---
-GR = r"E:\SteamLibrary\steamapps\common\Sacred Gold\scripts\us\global.res"
+import funkcode_sources as fs
+GR = os.environ.get("SACRED_GLOBALRES") or os.path.join(
+    fs.GAME_ROOT, "scripts", "us", "global.res")
 _data = open(GR, "rb").read()
 assert _data[:4] == b"SZ\x00\x00"
 _blob_start = struct.unpack_from("<I", _data, 8)[0]
@@ -57,11 +59,12 @@ def text_for_name(name):
     return text_for_id(sacred_hash(name))
 
 # --- FunkCode token scraper ---
-BIN_ROOT = r"E:\SteamLibrary\steamapps\common\Sacred Gold\bin"
-CLASSES = [
-    "TYPE_NPC_SERAPHIM","TYPE_NPC_GLADIATOR","TYPE_NPC_MAGICIAN","TYPE_NPC_ELVE",
-    "TYPE_NPC_DARKELVE","TYPE_NPC_DAEMONIN","TYPE_NPC_VAMPIRELADY","TYPE_NPC_ZWERG",
-]
+# Legacy names/values (base campaign, per-class dirs).  The corpus is wider —
+# see funkcode_sources.py — so all_tokens() now takes a source spec and
+# defaults to these 8 dirs so old callers are unaffected.
+BIN_ROOT = fs.BIN_ROOT
+CLASSES = list(fs.ALL_CLASSES)
+DEFAULT_SOURCES = "base-classes"
 QUEST_TOKEN_RE = re.compile(
     rb"\b("
     rb"HQ_\d+(?:_\d+){0,4}(?:_[A-Za-z][A-Za-z0-9_]*)*"
@@ -73,24 +76,32 @@ QUEST_TOKEN_RE = re.compile(
     rb"DQ_[A-Za-z0-9_]+"
     rb"|"
     rb"RB_[A-Za-z0-9_]+"
+    rb"|"
+    rb"GQ_[A-Za-z0-9_]+"
+    rb"|"
+    rb"SQ_[A-Za-z0-9_]+"
     rb")\b"
 )
 
-_token_cache = None
-def all_tokens():
-    """Return dict: token -> set(classes_where_seen)."""
-    global _token_cache
-    if _token_cache is not None: return _token_cache
+_token_cache = {}
+def all_tokens(sources=None):
+    """Return dict: token -> set(source labels where seen).
+
+    `sources` is any funkcode_sources spec ('all', 'addon', 'canonical',
+    'addon:NetScript', ...).  Default = the 8 base per-class dirs, and the
+    labels stay the bare class names ('SERAPHIM'), exactly as before.
+    """
+    spec = sources or DEFAULT_SOURCES
+    key = spec if isinstance(spec, str) else ",".join(map(str, spec))
+    if key in _token_cache: return _token_cache[key]
     out = collections.defaultdict(set)
-    for cls in CLASSES:
-        p = os.path.join(BIN_ROOT, cls, "FunkCode.bin")
-        if not os.path.exists(p): continue
-        data = open(p, "rb").read()
+    for s in fs.resolve(spec, default=DEFAULT_SOURCES):
+        data = s.read()
+        label = s.cls if s.campaign == "base" else s.key
         for m in QUEST_TOKEN_RE.findall(data):
-            tok = m.decode("ascii", "replace")
-            out[tok].add(cls.replace("TYPE_NPC_", ""))
-    _token_cache = dict(out)
-    return _token_cache
+            out[m.decode("ascii", "replace")].add(label)
+    _token_cache[key] = dict(out)
+    return _token_cache[key]
 
 # --- Quest card printing ---
 # Suffix templates we expect. Hashing prefix+suffix may yield hits even for
@@ -245,6 +256,7 @@ def grep_text(needle):
     return hits
 
 def main():
+    global DEFAULT_SOURCES
     ap = argparse.ArgumentParser(description="Sacred quest text dumper")
     ap.add_argument("prefix", nargs="?",
                     help="quest prefix to dump, e.g. HQ_3_1_4, NQ_5001, DQ_15013")
@@ -252,7 +264,10 @@ def main():
                     help="list all root prefixes in family (HQ, NQ, RB, DQ)")
     ap.add_argument("--grep", metavar="TEXT",
                     help="find quests whose text contains TEXT")
+    ap.add_argument("--sources", default=DEFAULT_SOURCES,
+                    help="source spec (default: base-classes; try 'all')")
     args = ap.parse_args()
+    DEFAULT_SOURCES = args.sources
 
     if args.list_prefixes:
         ps = list_prefixes(args.list_prefixes)
