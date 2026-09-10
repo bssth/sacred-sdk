@@ -50,6 +50,32 @@ static void resolve_dump_path(char* out, size_t outlen) {
     _snprintf_s(out, outlen, _TRUNCATE, "%s\\text_dump.bin", dir);
 }
 
+// The SecuROM stub decrypts .text progressively. A single 16 KB entropy
+// sample can drop below 7.0 while the pages our detours live in are still
+// ciphertext (run of 2026-09-10 20:53: "decryption detected" at +250 ms, then
+// patch6 / text_logger aborted on garbage prologues -> no custom strings, no
+// dialog override, no names for the whole session). So, in addition to the
+// entropy check, require the first bytes of every hook site to be the known
+// plaintext before declaring the image decrypted.
+struct SiteSig { uintptr_t va; unsigned char b[3]; const char* name; };
+static const SiteSig kSites[] = {
+    { 0x0080EAF0u, { 0x6A, 0xFF, 0x68 }, "text_logger FUN_0080eaf0" },
+    { 0x0080F5E0u, { 0x53, 0x56, 0x8B }, "text_logger FUN_0080f5e0" },
+    { 0x00672CF0u, { 0x8B, 0x44, 0x24 }, "text_logger FUN_00672cf0" },
+    { 0x00811440u, { 0x51, 0x53, 0x55 }, "patch6 FUN_00811440" },
+};
+static bool sites_ready(const char** first_bad) {
+    uintptr_t reb = (uintptr_t)g_attach.exe_module - 0x00400000u;
+    for (const SiteSig& S : kSites) {
+        const unsigned char* c = (const unsigned char*)(reb + S.va);
+        if (c[0] != S.b[0] || c[1] != S.b[1] || c[2] != S.b[2]) {
+            if (first_bad) *first_bad = S.name;
+            return false;
+        }
+    }
+    return true;
+}
+
 static DWORD WINAPI worker(LPVOID) {
     // Sample window in the middle of .text — picked to be deep enough that
     // very-late patching from the stub still has had time to settle.
@@ -72,8 +98,13 @@ static DWORD WINAPI worker(LPVOID) {
             sdk_log("[dump] poll #%d entropy=%.3f", round, last_H);
         }
         if (last_H < 7.0) {
-            decrypted = true;
-            break;
+            const char* bad = nullptr;
+            if (sites_ready(&bad)) {
+                decrypted = true;
+                break;
+            }
+            if (round % 4 == 0)
+                sdk_log("[dump] entropy ok but hook site not yet decrypted: %s — waiting", bad);
         }
     }
 
@@ -107,7 +138,8 @@ static DWORD WINAPI worker(LPVOID) {
     }
 
     if (decrypted) {
-        sdk_log("[dump] decryption detected — installing patches");
+        sdk_log("[dump] decryption detected (entropy + %u hook sites plaintext, round %d) — installing patches",
+                (unsigned)(sizeof(kSites) / sizeof(kSites[0])), round);
         patches::install();
         text_logger::install();
         // sacred_log_mirror::install();  // still disabled (needs SuspendThread)
