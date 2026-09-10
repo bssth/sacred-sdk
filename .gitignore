@@ -55,6 +55,7 @@ ghidra/
 
 # Python build/cache
 __pycache__/
+re/py/x86/_cache/
 *.pyc
 *.pyo
 .pytest_cache/
