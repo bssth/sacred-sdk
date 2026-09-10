@@ -1,3 +1,20 @@
+> ⚠️ **PARTLY SUPERSEDED (2026-09-10) — see `npc_ai_flags.md`.**
+> The "side/flag opcode" rows below (`0x08`, `0x0e`, `0x2b`, `0x2e`, `0x2f`,
+> `0x30`, `0x31`, `0x32`, `0x42`…`0x4c`, `0x1a`/`0x23`/`0x24`/`0x25`/`0x64`) were
+> MED/LOW guesses and several are **wrong**:
+> * `cCreature+0x1F4` is the **AI behaviour-mode word**, not a faction side.
+>   Faction is `+0x1F0` (`combat_init.md` §4). The low word of `+0x1F4` is
+>   single-select — most opcodes *replace* it rather than OR into it.
+> * `0x08` is the **hostile** spawn marker, not "ally-leaning" — it was
+>   backwards.
+> * `0x23`/`0x24`/`0x25` are **blacksmith / merchant / combat-art trainer**
+>   service flags (they write `+0x200`), confirmed against `UI_WND_BLACKSMITH` /
+>   `UI_WND_MERCHANT` / `UI_WND_MASTER` in `KiTalk`/`EiTalk`.
+> Everything else here (record grammar, POSITION resolution, `+0x96` quest
+> binding, the property map) still stands. The field-width table in the TL;DR is
+> incomplete — the authoritative decoder is `sdk/re/py/x86/npc_records.py`
+> (99.99 % of 64 246 vanilla records).
+
 # Sacred Gold — NPC model (CreateNPC, faction, quest binding) — RE report
 
 Target: Steam build 2.0.2.28, `sdk\Sacred_decrypted.exe`, base 0x00400000,
