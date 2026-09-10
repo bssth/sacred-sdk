@@ -1,5 +1,12 @@
 # Talk-trigger mechanism — DECODED (2026-06-10, static RE)
 
+> **SUPERSEDED for dialog TEXT (banner 2026-06-20).** Where this doc frames
+> custom dialog text as an "architectural wall" (the FUN_00465220-bypass / raw
+> hash vs resolved content handle), that is **SOLVED**: dialog text now renders
+> natively via the `dialog_override` hash-swap at `FUN_0080f5e0`
+> (`text_logger.cpp:163-196`), driven by `Npc:say(text_key, vanilla_node)`. The
+> talk SIGNAL analysis here (cCreature+0x200 bit 0x400) is still valid and in use.
+
 **This is the missing piece for HANDOFF §5 "THE BLOCKER".** Decoded statically
 from `Sacred_decrypted.exe` (capstone scans in this folder: `talk_fmt_xref.py`,
 `talk_handler_dis.py`, `talk_classify.py`, `talk_jt.py`, `trigger_container.py`).

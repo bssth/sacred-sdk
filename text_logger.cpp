@@ -110,7 +110,21 @@ static void map_persist_append(uint32_t key, uint32_t hash) {
 }
 
 static void map_add(uint32_t key, uint32_t hash, bool persist) {
-    if (!key || !hash || map_lookup(key)) return;
+    if (!key || !hash) return;
+    // (2026-09-10) This used to bail on `map_lookup(key)`, i.e. the FIRST text
+    // ever mapped to a vanilla node was permanent. That silently blocked the
+    // one thing a quest needs after a step completes: re-pointing the same node
+    // at a DIFFERENT line ("повторные диалоги" — the NPC kept re-offering the
+    // quest greeting). Re-mapping an existing key now updates it in place.
+    long cur = g_map_n;
+    for (long i = 0; i < cur; i++) if (g_map[i].key == key) {
+        if (g_map[i].hash != hash) {
+            g_map[i].hash = hash;
+            sdk_log("[dlgredir] map RETARGET key=%08x -> hash=%08x", key, hash);
+            if (persist) map_persist_append(key, hash);
+        }
+        return;
+    }
     long n = g_map_n;
     if (n >= 128) return;
     g_map[n].key = key; g_map[n].hash = hash;
@@ -201,16 +215,159 @@ static const char* override_lookup(const char* name) {
     return nullptr;
 }
 
+// ---- by-SPEAKER override (2026-09-10) ---------------------------------------
+// The vanilla node the engine attaches to a runtime-bound NPC comes from the
+// region's dynamic-quest pool and changes per game (the same captain showed
+// DQ_15024_OFFEN, WW_LASTTAVERN and NQ_UW12_MSG_START on three runs), so the
+// by-NAME override above is fragile. Register {handle -> our text key}; when
+// the quest-dialog walker resolves a node that has no explicit override, take
+// the text of the registered NPC the player is talking to: conversation open
+// (creature+0x150 == 6) or the talk signal (+0x200 & 0x400) within talk range
+// of the hero. Node BUTTON layout still comes from the vanilla node.
+// Implemented in runtime_triggers.cpp: remembers which of our NPCs the talk
+// window is showing text for, so the dialog pump can fire DLGANS:<name> on the
+// player's answer even though the pump gets refKey == 0 for runtime NPCs.
+extern "C" void sdk_dlg_note_speaker(int handle);
+struct Speaker { int handle; char key[64]; };
+static Speaker       g_spk[16];
+static volatile long g_spk_n = 0;
+
+extern "C" void text_logger_dialog_speaker(int handle, const char* key) {
+    long n = g_spk_n;
+    for (long i = 0; i < n; i++) if (g_spk[i].handle == handle) {
+        if (key && *key) { strncpy_s(g_spk[i].key, key, _TRUNCATE); }
+        else { g_spk[i] = g_spk[n - 1]; g_spk_n = n - 1; }
+        sdk_log("[dlgname] speaker h=%d %s", handle, (key && *key) ? key : "(unregistered)");
+        return;
+    }
+    if (!key || !*key || n >= 16) return;
+    g_spk[n].handle = handle;
+    strncpy_s(g_spk[n].key, key, _TRUNCATE);
+    g_spk_n = n + 1;
+    sdk_log("[dlgname] speaker h=%d -> \"%s\" (n=%ld)", handle, key, g_spk_n);
+}
+
+static bool speaker_state(int handle, uint16_t* s150, uint32_t* f200, int32_t* kx, int32_t* ky) {
+    uintptr_t c = sdk::player::npc_creature(handle);
+    if (!c) return false;
+    int type = 0; uint32_t fac = 0;
+    if (!sdk::player::npc_info(handle, &type, kx, ky, &fac)) return false;
+    bool ok = true;
+    __try { *s150 = *(uint16_t*)(c + 0x150); *f200 = *(uint32_t*)(c + 0x200); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { ok = false; }
+    return ok;
+}
+
+// Which of OUR bound NPCs is the player talking to at this instant?
+//
+// This is what makes the dialog-text override independent of WHICH vanilla node
+// the engine's region DQ pool happened to hand our NPC. That matters: the pool
+// picks by creature type/object index, so the same captain served
+// "DQ_15024_OFFEN" in runs 7-8 and "WW_LASTTAVERN" (a signpost line!) in run 9.
+// Keying the override on one hardcoded node name can therefore never be enough.
+//
+// (2026-09-10) The old test `s150 == 6 || (f200 & 0x400)` NEVER matched:
+//   * +0x150 is 7, not 6, for a runtime NPC with its window open (44/44 samples
+//     across every log belong to the NPC actually being talked to);
+//   * +0x200 bit 0x400 is a sub-tick PULSE, long gone by the time the window
+//     fetches its body text.
+// So the by-speaker path was dead code and every talk fell through to the raw
+// pool line. Match the LEVEL (6 or 7), nearest first; keep the pulse as a
+// fallback for anything that sets it without going through the state machine.
+static const char* speaker_lookup(int* out_handle) {
+    long n = g_spk_n;
+    if (n <= 0) return nullptr;
+    int32_t hx = 0, hy = 0;
+    bool have_hero = sdk::player::world_pos(&hx, &hy);
+    const char* best = nullptr; long bestd = 0x7fffffff; int besth = 0;
+    bool best_is_level = false;
+    for (long i = 0; i < n; i++) {
+        uint16_t s150 = 0; uint32_t f200 = 0; int32_t kx = 0, ky = 0;
+        if (!speaker_state(g_spk[i].handle, &s150, &f200, &kx, &ky)) continue;
+        bool level = (s150 == 6 || s150 == 7);
+        bool pulse = (f200 & 0x400u) != 0;
+        if (!level && !pulse) continue;
+        long d = 0;
+        if (have_hero) {
+            long dx = kx - hx, dy = ky - hy;
+            d = dx * dx + dy * dy;
+            // A pulse-only hit still has to be within talking range; the level
+            // is authoritative on its own (the state machine only sets it on
+            // the creature the player opened a conversation with).
+            if (!level && d > 12 * 12) continue;
+        }
+        if (level && !best_is_level) {            // level always beats pulse
+            best_is_level = true; bestd = d; best = g_spk[i].key; besth = g_spk[i].handle;
+            continue;
+        }
+        if (level == best_is_level && d < bestd) {
+            bestd = d; best = g_spk[i].key; besth = g_spk[i].handle;
+        }
+    }
+    if (best) *out_handle = besth;
+    return best;
+}
+
+// ── TRANSIENT per-talk hash redirect (2026-09-10, run 14) ───────────────────
+// The by-speaker override above fixes the NAME resolver (FUN_00672cf0), but the
+// talk window fetches its BODY separately, by HASH, through FUN_0080f5e0 — and
+// that path only had the static by-node-name map. So whenever the DQ pool handed
+// our NPC a node we had not hardcoded, the name was swapped and the body still
+// came out vanilla. That is the "Is that beast still alive?" screenshot: the
+// pool gave the captain DQ_15003_OFFEN (it had given DQ_15024_OFFEN and
+// WW_LASTTAVERN on earlier runs — it changes every game), the by-speaker hook
+// logged a hit, and no `[dlgredir] swap` line followed because 15003's hash was
+// not in the map.
+//
+// Fix: when the by-speaker override fires we remember {node hash -> our hash}
+// for THAT talk, and the body fetch honours it. Deliberately NOT written into
+// the persistent map: a pool node belongs to real dynamic quests too, and a
+// permanent entry would put our captain's line into some vanilla NPC's mouth.
+// It is live only while that NPC's window is actually open (+0x150 == 6/7), plus
+// a 3 s grace for the fetch that lands before the state machine flips.
+static volatile uint32_t g_spk_node_hash = 0;
+static volatile uint32_t g_spk_text_hash = 0;
+static volatile int      g_spk_live_h    = 0;
+static volatile DWORD    g_spk_live_t    = 0;
+
+static bool speaker_window_open(int handle) {
+    uint16_t s150 = 0; uint32_t f200 = 0; int32_t kx = 0, ky = 0;
+    if (!speaker_state(handle, &s150, &f200, &kx, &ky)) return false;
+    return (s150 == 6 || s150 == 7 || (f200 & 0x400u) != 0);
+}
+
 static void* __fastcall hook_FUN_00672cf0(void* this_ptr, void* edx, const char* name) {
     // FUN_00672cf0 resolves ALL by-name text; the QUEST DIALOG walker calls it
     // from ~0x4752xx-0x4754xx (proven by the dlgcaller trace). Only act there.
     uintptr_t ra = (uintptr_t)_ReturnAddress();
     if (name && ra >= 0x00475100 && ra < 0x00475680) {
         __try {
-            // NATIVE OVERRIDE: swap the vanilla node name for our text name.
+            // NATIVE OVERRIDE, by-SPEAKER FIRST (2026-09-10). The speaker map
+            // is per-handle and authoritative: it answers "whose window is
+            // this?", so it cannot mix two NPCs up. The by-NAME map is global —
+            // two of our NPCs handed the SAME pool node (the pool picks by
+            // creature type, so that WILL happen) would both render the first
+            // one's line. Name map stays as the backstop for resolutions that
+            // happen with no live speaker.
+            int sph = 0;
+            const char* spk = speaker_lookup(&sph);
+            if (spk) {
+                sdk_log("[dlgname] by-speaker override \"%s\" -> \"%s\" (h=%d)", name, spk, sph);
+                sdk_dlg_note_speaker(sph);
+                // arm the body fetch for THIS talk (see the block above)
+                g_spk_node_hash = sacred::engine::sacred_hash(name);
+                g_spk_text_hash = sacred::engine::sacred_hash(spk);
+                g_spk_live_h    = sph;
+                g_spk_live_t    = GetTickCount();
+                return g_tramp_672cf0(this_ptr, edx, spk);
+            }
             const char* sub = override_lookup(name);
             if (sub) {
                 sdk_log("[dlgname] override \"%s\" -> \"%s\"", name, sub);
+                // the NPC whose text key this is = the one talking now
+                long sn = g_spk_n;
+                for (long i = 0; i < sn; i++)
+                    if (!strcmp(g_spk[i].key, sub)) { sdk_dlg_note_speaker(g_spk[i].handle); break; }
                 return g_tramp_672cf0(this_ptr, edx, sub);
             }
             // DISCOVERY: log each DISTINCT dialog line name once (dedup by hash),
@@ -244,6 +401,21 @@ static wchar_t* __fastcall hook_FUN_0080f5e0(void* this_ptr, void* edx, unsigned
 
     // REDIRECT: a mapped vanilla key -> swap unconditionally for our baked text.
     uint32_t to = map_lookup(k);
+    // ...or the node the by-speaker override just claimed for an open window.
+    // Checked FIRST: it is per-talk and per-NPC, so it is strictly more precise
+    // than the global by-name map (which can be stale after a post-step retarget).
+    if (k && k == g_spk_node_hash && g_spk_text_hash && k != g_spk_text_hash) {
+        DWORD age = GetTickCount() - g_spk_live_t;
+        if (age < 3000u || (age < 60000u && speaker_window_open(g_spk_live_h))) {
+            wchar_t* ours = g_tramp_f5e0(this_ptr, edx, g_spk_text_hash);
+            if (ours) {
+                InterlockedIncrement(&g_redir_hits);
+                sdk_log("[dlgredir] speaker swap key=%08x -> hash=%08x (h=%d, age=%lums)",
+                        k, g_spk_text_hash, g_spk_live_h, age);
+                return ours;
+            }
+        }
+    }
     if (to && k != to) {
         wchar_t* ours = g_tramp_f5e0(this_ptr, edx, to);
         if (ours) {

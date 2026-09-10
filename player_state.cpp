@@ -296,12 +296,32 @@ static uint32_t hero_slot(uintptr_t reb) {
     return idx;
 }
 
-// COMPANION (A-recipe): party-follow + fights for hero. cCreature+0x1F4
-// bit 0x4 = "owner-substituted summon/pet"; +0x251 = owner handle (hero
-// slot). FUN_00423480 then treats it AS the hero for friend/foe, and
-// FUN_00542b20:1121 leashes it to the hero (SP, engine-driven, no
-// script). +bit0 awake, clear 0x40000 peaceful; +0x1F0=7 ally; WakeUp.
-bool npc_make_companion(int handle) {
+// Hero cCreature* (ctx+0x14 player slot -> object-manager array). 0 if the
+// chain is not resolvable (menu / loading).
+static uintptr_t hero_creature_ptr(uintptr_t reb) {
+    uintptr_t om = 0, ctx = 0, arr = 0, arr_end = 0, hero = 0; uint32_t idx = 0;
+    if (!safe_read_ptr(reb + 0x00AD5C40, &om) || !om) return 0;
+    if (!safe_read_ptr(reb + 0x0182EBE8, &ctx) || !ctx) return 0;
+    if (!safe_read<uint32_t>(ctx + 0x14, &idx) || !idx || idx > 0x10) return 0;
+    if (!safe_read_ptr(om + 4, &arr) || !arr) return 0;
+    if (!safe_read_ptr(om + 8, &arr_end)) return 0;
+    if (idx >= (uint32_t)((arr_end - arr) >> 2)) return 0;
+    if (!safe_read_ptr(arr + (uintptr_t)idx * 4, &hero) || !hero) return 0;
+    return hero;
+}
+
+// COMPANION — the engine's own script-'follow' path (LIVE-CONFIRMED
+// 2026-09-10, npc_ai_flags.md "Companion mechanisms"): deliver command 0x10B
+// {a=4, b=hero slot} to the creature's vfn[6] (cCreature receive,
+// FUN_0052e590). The handler sets +0x251=owner, +0x1F4|=4 (follow/pet AI
+// mode: leash, catch-up, fights for the owner, treated as the hero for
+// friend/foe), calls WakeUp and registers the creature into the hero's party
+// vector hero+0x39c via FUN_0054b200 — which is what the companion panel
+// draws. The old hand-rolled recipe did everything except that registration,
+// so companions followed and fought but never got a portrait. Level is kept
+// (unlike the 'hireling' path FUN_0054cf70, which re-levels to the hero).
+typedef void* (__thiscall* fn_recv_cmd)(void* self, void* cmd);
+bool npc_make_companion(int handle, bool combat) {
     uintptr_t c = npc_creature(handle);
     if (!c) return false;
     HMODULE exe = g_attach.exe_module; if (!exe) return false;
@@ -309,37 +329,62 @@ bool npc_make_companion(int handle) {
     uint32_t hs = hero_slot(reb);
     if (!hs) { sdk_log("[companion] h=%d no hero slot", handle);
                return false; }
+    uintptr_t vt = 0, fn = 0;
+    if (!safe_read_ptr(c, &vt) || !vt || !safe_read_ptr(vt + 0x18, &fn) || !fn) {
+        sdk_log("[companion] h=%d vtable unresolved", handle);
+        return false;
+    }
+    uint32_t cmd[0x11] = { 0 };                 // 0x44-byte command object
+    cmd[0] = (uint32_t)(reb + 0x0089095C);      // PTR_FUN_0089095c vtable
+    cmd[1] = 0x10B;                             // 'follow'
+    cmd[5] = 4;                                 // sub-op (handler requires 4)
+    cmd[6] = hs;                                // owner = hero player slot
     uint32_t f = 0;
     __try {
-        safe_write<uint32_t>(c + 0x251, hs);              // owner = hero
-        if (safe_read<uint32_t>(c + 0x1F4, &f))
-            safe_write<uint32_t>(c + 0x1F4,
-                                 (f | 0x4u | 0x1u) & ~0x40000u);
         uint8_t b = 0;                                    // un-stationary
         if (safe_read<uint8_t>(c + 0x2B7, &b))
             safe_write<uint8_t>(c + 0x2B7, (uint8_t)(b & ~0x08));
+        if (safe_read<uint32_t>(c + 0x1F4, &f) && (f & 0x40000u))
+            safe_write<uint32_t>(c + 0x1F4, f & ~0x40000u); // never the inverted-friend mode
+        ((fn_recv_cmd)fn)((void*)c, (void*)cmd);          // engine: owner, |4, WakeUp, party
         ((fn_stance)(reb + 0x0052E420))((void*)c, 1, 7);  // +0x1F0=7 ally
-        ((fn_wake)(reb + 0x0059F580))((void*)c);          // WakeUp
+        if (combat) {
+            // COMBAT companion = the hireling AI mode (0x100) instead of the
+            // follow/pet mode (4). The target picker FUN_00542b20 only lets a
+            // party member JOIN THE HERO'S FIGHT when its +0x1F4 has 0x100
+            // (or 0x10000) — mode-4 followers only defend themselves. Same
+            // registration/owner as above, but WITHOUT FUN_0054cf70's level
+            // re-sync (a level-18 guard stays level 18).
+            if (safe_read<uint32_t>(c + 0x1F4, &f))
+                safe_write<uint32_t>(c + 0x1F4, (f & ~0x4u) | 0x100u);
+        }
     } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
-    sdk_log("[companion] h=%d -> hero slot %u (follow+fight)", handle, hs);
+    sdk_log("[companion] h=%d -> hero slot %u via cmd 0x10B (%s, party panel)",
+            handle, hs, combat ? "hireling AI 0x100" : "follow AI 4");
     return true;
 }
 
-// DISMISS (B-recipe, exact inverse): clear summon bit + owner so the
-// engine stops substituting/leashing; independent neutral matrix class.
+// DISMISS (exact inverse): native party removal FUN_00551300(ECX=hero, handle)
+// drops the hero+0x39c entry (panel portrait) and plays the 'left' sound;
+// then the engine's own field resets (+0x251=-1, follow/hireling mode bits
+// cleared) and an independent neutral matrix class.
+typedef int (__thiscall* fn_party_remove)(void* hero, int handle);
 bool npc_dismiss(int handle) {
     uintptr_t c = npc_creature(handle);
     if (!c) return false;
     HMODULE exe = g_attach.exe_module; if (!exe) return false;
     uintptr_t reb = reinterpret_cast<uintptr_t>(exe) - 0x00400000;
+    uintptr_t hero = hero_creature_ptr(reb);
     uint32_t f = 0;
     __try {
+        if (hero) ((fn_party_remove)(reb + 0x00551300))((void*)hero, handle);
         if (safe_read<uint32_t>(c + 0x1F4, &f))
-            safe_write<uint32_t>(c + 0x1F4, f & ~0x4u);
-        safe_write<uint32_t>(c + 0x251, 0);
+            safe_write<uint32_t>(c + 0x1F4, f & ~0x104u);   // 4 = follow, 0x100 = hireling
+        safe_write<uint32_t>(c + 0x251, 0xFFFFFFFFu);
         ((fn_stance)(reb + 0x0052E420))((void*)c, 1, 3);  // neutral
     } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
-    sdk_log("[companion] h=%d dismissed", handle);
+    sdk_log("[companion] h=%d dismissed (party entry removed, hero=%s)", handle,
+            hero ? "ok" : "unresolved");
     return true;
 }
 
@@ -859,7 +904,12 @@ static size_t dlg_put_dialog_rec(uint8_t* o, const char* res_key,
         o[p++] = 0x09; while (*dlg_name) o[p++] = (uint8_t)*dlg_name++;
         o[p++] = 0;                                     // fid 9: DlgNPC name
     }
-    o[p++] = 0x39;                                      // button/flag field '9'
+    // (2026-09-10) the trailing 0x39 that used to be here is NOT a "button
+    // field": in the DialogShow grammar it is the script keyword `unfollow`
+    // (FUN_0048bb40 case 0x39 -> consequence 0x400 -> FUN_00461540 sends
+    // cmd 0x10B owner=0). Vanilla escort blocks use 0x37 (`follow`) on the
+    // "come with me" lines and 0x39 on the neutral ones. We carry no
+    // consequence in the armed record; companions are made explicitly.
     o[p++] = 0x00;                                      // END
     o[0] = 0x03; o[1] = (uint8_t)(p >> 8); o[2] = (uint8_t)(p & 0xff);
     return p;
@@ -1174,6 +1224,11 @@ bool dialog_clear(int handle) {
         __try {
             safe_write<uint32_t>(oe + 0x4c, 0);          // content -> none
             safe_write<uint32_t>(oe + 0x48, 0x08u);      // marker glyph off
+            // (2026-09-10) tried entry+0 = -1 here to make the NPC
+            // un-talkable after its quest step: the NAMEPLATE reads the
+            // same by-handle entry -> names vanished. Reverted. Talkability
+            // and the name are coupled in the engine; fix the CONTENT
+            // (own Dialog: block) instead of unbinding.
             any = true;
         } __except (EXCEPTION_EXECUTE_HANDLER) {}
     }
@@ -1209,6 +1264,100 @@ bool dialog_clear(int handle) {
     }
     sdk_log("[dialog_clear] h=%d -> %s", handle, any ? "cleared" : "no-entry");
     return any;
+}
+
+// ── Make a bound quest NPC stop being a talk target (2026-09-10) ────────────
+//
+// Why this and not the obvious knobs. Once an NPC is dialog-bound, the engine
+// ALWAYS finds it a line: if the quest has none it falls back to the region's
+// dynamic-quest pool, which is why our captain kept opening a window with a
+// random pool node ("повторные диалоги") after his step was done. Two earlier
+// attempts to close it both cost the nameplate, because the name and the
+// talkability read the same by-handle DlgNPC entry:
+//   * entry+0 = -1              -> names vanished (reverted 2026-09-10)
+//   * cCreature+0x14 &= ~0x80000 -> name lost AND it is the marker/FX gate
+//
+// The third knob is the one the engine itself uses to FIND the entry:
+// `cCreature+0x245`, the DlgNPC OBJECT index, stamped at bind time by
+// FUN_005498F0 and read by dlg_entry_by_objidx / the marker selector
+// FUN_00499E90. Every non-dialog creature in the live dumps carries objIdx=0
+// with "dlgEntry +48=FFFFFFFF +4c=FFFFFFFF" — 0 IS the engine's own "no dialog
+// object" value. Zeroing it should therefore make the lookup miss (no line, no
+// talk cursor) while the BY-HANDLE entry that holds the custom name is left
+// completely untouched.
+//
+// Use the ENGINE'S OWN unbind, FUN_005498F0 — do not poke the byte by hand.
+// Decompiled (sdk/re/ghidra/decompiled/005498f0_FUN_005498f0.c):
+//
+//     *(int *)(cre + 0x245) = idx;                    // 32-bit, not a byte
+//     if (idx < 1) *(uint *)(cre + 0x14) &= 0xfff7ffff;   // clears 0x80000
+//
+// Two things a hand-written byte write got wrong, and the second one is
+// exactly the "?!" that turned yellow. The index is a DWORD at +0x245, and
+// clearing it MUST come with clearing the +0x14 marker gate — because the
+// nameplate/marker draw FUN_00599910 does:
+//
+//     if ((cre[0x14] & 0x80000) != 0) { idx = FUN_00549920(); glyph = FUN_00499E90(idx); }
+//
+// and FUN_00499E90 returns `dlgEntry[idx] + 0x48` with NO special case for 0.
+// So gate-on + idx 0 = "draw entry #0's sprite", i.e. some main-storyline
+// quest giver's yellow "?!" borrowed onto our NPC. The engine never hits that
+// state because its own unbind always drops the gate with the index.
+//
+// Fully revertible: the previous index is saved per handle; npc_talkable(h,
+// true) re-stamps it and puts the gate back.
+struct TalkIdxSave { int handle; int idx; };
+static TalkIdxSave  g_talkidx[32];
+static int          g_talkidx_n = 0;
+
+typedef void (__thiscall* fn_stamp_idx_t)(void* cCreature, int idx, char net);
+
+bool npc_talkable(int handle, bool on) {
+    HMODULE exe = g_attach.exe_module; if (!exe) return false;
+    uintptr_t reb = reinterpret_cast<uintptr_t>(exe) - 0x00400000;
+    uintptr_t c = npc_creature(handle);
+    if (!c) return false;
+    int cur = 0; uint32_t f14 = 0;
+    __try { cur = *(int*)(c + 0x245); f14 = *(uint32_t*)(c + 0x14); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+
+    int slot = -1;
+    for (int i = 0; i < g_talkidx_n; i++)
+        if (g_talkidx[i].handle == handle) { slot = i; break; }
+
+    if (!on) {
+        if (cur < 1) {
+            sdk_log("[talkable] h=%d already untalkable (objIdx=%d)", handle, cur);
+            return true;
+        }
+        if (slot < 0) {
+            if (g_talkidx_n >= 32) return false;
+            slot = g_talkidx_n++;
+            g_talkidx[slot].handle = handle;
+        }
+        g_talkidx[slot].idx = cur;
+        __try {
+            ((fn_stamp_idx_t)(reb + 0x005498F0))((void*)c, 0, 0);
+        } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+        uint32_t after = 0;
+        (void)safe_read<uint32_t>(c + 0x14, &after);
+        sdk_log("[talkable] h=%d OFF: objIdx %d -> 0 via FUN_005498F0, +0x14 %08X -> %08X "
+                "(marker gate %s)", handle, cur, f14, after,
+                (after & 0x80000u) ? "STILL SET?!" : "cleared");
+        return true;
+    }
+    if (slot < 0) {
+        sdk_log("[talkable] h=%d ON: nothing saved to restore", handle);
+        return false;
+    }
+    __try {
+        ((fn_stamp_idx_t)(reb + 0x005498F0))((void*)c, g_talkidx[slot].idx, 0);
+        uint32_t v = 0;
+        if (safe_read<uint32_t>(c + 0x14, &v))
+            safe_write<uint32_t>(c + 0x14, v | 0x80000u);   // stamp() only drops it
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    sdk_log("[talkable] h=%d ON: objIdx 0 -> %d (gate restored)", handle, g_talkidx[slot].idx);
+    return true;
 }
 
 // FUN_00482510 is __thiscall with TWO stack args and `ret 8` (callee

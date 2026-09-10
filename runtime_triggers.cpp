@@ -283,10 +283,26 @@ static int sacred_hero_has_item(int item_res) {
 // Qbit-set/get: deferred. Recon located the bitarray at
 // interpreter_ctx + 0xA860 but resolving the interpreter ctx pointer
 // reliably needs more work. Modders use the bake-time path for now.
-static bool sacred_set_hero_qbit(int /*bit*/, bool /*value*/) {
+static bool sacred_set_hero_qbit(int bit, bool /*value*/) {
+    static bool warned = false;
+    if (!warned) {
+        warned = true;
+        sdk_log("[runtime_triggers] WARNING: ctx:set_qbit(%d,..) is NOT "
+                "implemented at runtime (the interp-ctx+0xA860 bitarray "
+                "resolve is still TODO). It is a silent no-op — use the "
+                "BAKE-time q.set_hero_qbit() instead. This warns once.", bit);
+    }
     return false;
 }
-static int sacred_get_hero_qbit(int /*bit*/) {
+static int sacred_get_hero_qbit(int bit) {
+    static bool warned = false;
+    if (!warned) {
+        warned = true;
+        sdk_log("[runtime_triggers] WARNING: ctx:get_qbit(%d) is NOT "
+                "implemented at runtime (returns nil). The interp-ctx "
+                "+0xA860 bitarray resolve is still TODO. This warns once.",
+                bit);
+    }
     return -1;
 }
 
@@ -616,6 +632,7 @@ static bool sdk_qid_has(uint32_t id) {
 // at decompiled/004b5370_FUN_004b5370.c.
 typedef void (__thiscall *qb_resize_t)(void* this_, uint32_t new_count);
 
+static unsigned g_track_log_n = 0;
 static int questbook_count_safe() {
     __try {
         uintptr_t begin = *(uintptr_t*)QB_REGISTRY_BEGIN_VA;
@@ -982,7 +999,14 @@ static int questbook_set_log_impl(uint32_t quest_id, int page,
         // quests are added later, parameterize this per quest_id.)
         *(uint32_t*)(e + QB_ENTRY_OFF_TYPE) = 3;   // 3 = MAIN/story
         *(uint32_t*)(e + QB_ENTRY_OFF_KIND) = 2;   // 2 = active state
-        *(uint32_t*)(e + 0x0C)              = 1;   // vanilla active = 1
+        // Active bullet = +0x0C bit0 (vanilla active = 1). Set bit0 via a
+        // masked RMW instead of a whole-word write so a step state stamped
+        // earlier by questbook_set_step_done (the same byte) survives a
+        // re-call of set_log; mirrors set_step_done's RMW.
+        {
+            uint8_t b0c = *(uint8_t*)(e + 0x0C);
+            *(uint8_t*)(e + 0x0C) = (uint8_t)(b0c | 1);
+        }
         *(uint32_t*)(e + QB_ENTRY_OFF_LOG0) = handles[0];
         for (int i = 1; i < n_names; i++) {
             *(uint32_t*)(e + QB_ENTRY_OFF_LOGN + (uintptr_t)(i - 1) * 4) = handles[i];
@@ -1076,9 +1100,14 @@ static int l_sacred_questbook_set_kompass(lua_State* L) {
 //
 // Objective bullet: entry+0x0C bit0 → filled ("done") vs hollow ("open").
 
-// Slot-3 (single tracked target, WHITE/primary look) — we now clear it
-// and use slot-1 instead so a quest_id>100 gets the SECONDARY side-quest
-// marker style (see .claude/knowledge/re/quest_marker_pos.md Q2).
+// Slot-3 (single tracked target, WHITE/primary look) — this is the path
+// we DRIVE: enabling +0x7718=1 gives the white primary compass arrow, and
+// the world-map icon re-reads quest-entry +0x00 (==3 ⇒ MAIN sprite 0x8A /
+// 0xFFFFFF80). We deliberately do NOT register slot-1 (the generic green
+// per-class arrow with no category). See quest_lifecycle.md "Map-marker
+// main-vs-secondary" §3. (Older comments here described an abandoned
+// "clear slot-3, use slot-1" design — that demoted the marker to the
+// secondary green arrow and has been superseded.)
 constexpr uintptr_t QB_S3_X       = 0x7704;
 constexpr uintptr_t QB_S3_Y       = 0x7708;
 constexpr uintptr_t QB_S3_ON      = 0x7718;
@@ -1103,11 +1132,14 @@ static uint32_t questbook_active_class() {
     } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
 }
 
-// Secondary-style map/minimap marker for `quest_id`. Writes the literal
-// world coord onto the entry (+0x10/+0x14, +0x20=0), registers the entry
-// index in the slot-1 per-class column, and clears slot-3 so the old
-// white primary marker stops drawing. quest_id must satisfy the slot-1
-// gate: id>=100, entry+4<99, and NOT 8999<id<9500 (9512 passes).
+// MAIN/primary map+minimap marker for `quest_id`. Writes the literal
+// world coord onto the entry (+0x10/+0x14, +0x20=0) and drives SLOT-3 (the
+// white primary compass arrow: mgr+0x7704/+0x7708 coord, +0x7718=1 enable).
+// The world-map ICON style follows entry+0x00 (==3 ⇒ MAIN), already set by
+// questbook_set_log_impl. We do NOT register the slot-1 per-class column
+// (generic green side arrow). The active class C is computed only for the
+// log line below. (Was previously the inverse — slot-1 + clear slot-3 —
+// which is why the marker rendered as a secondary green arrow.)
 static int questbook_set_marker_impl(uint32_t quest_id, int32_t wx, int32_t wy) {
     uintptr_t mgr = g_quest_mgr;
     if (!mgr) return -1;
@@ -1495,6 +1527,18 @@ static int l_sacred_dialog_clear(lua_State* L) {
     return 1;
 }
 
+// sacred.npc_talkable(handle, on) -> bool
+// on=false: zero cCreature+0x245 (the DlgNPC object index) so the engine finds
+// no dialog object for this NPC — no talk cursor, no window, and crucially no
+// fallback to the region quest pool. The by-handle entry holding the NPC's
+// custom NAME is untouched. on=true restores the saved index.
+static int l_sacred_npc_talkable(lua_State* L) {
+    int h = (int)luaL_checkinteger(L, 1);
+    bool on = (lua_gettop(L) >= 2) ? (lua_toboolean(L, 2) != 0) : true;
+    lua_pushboolean(L, sdk::player::npc_talkable(h, on));
+    return 1;
+}
+
 // sacred.npc_roster_add(handle, quest_id) -> bool  (companion panel)
 static int l_sacred_npc_roster_add(lua_State* L) {
     lua_pushboolean(L, sdk::player::npc_roster_add(
@@ -1518,8 +1562,9 @@ static int l_sacred_roster_dump(lua_State* L) {
 
 // sacred.npc_make_companion(handle) -> bool   (party-follow + fights)
 static int l_sacred_npc_make_companion(lua_State* L) {
+    bool combat = (lua_gettop(L) >= 2) && lua_toboolean(L, 2);
     lua_pushboolean(L, sdk::player::npc_make_companion(
-        (int)luaL_checkinteger(L, 1)));
+        (int)luaL_checkinteger(L, 1), combat));
     return 1;
 }
 // sacred.npc_dismiss(handle) -> bool
@@ -1775,13 +1820,33 @@ static int l_sacred_npc_peek(lua_State* L) {
 // Works for ANY bound NPC — no HW-BP, no hooks, no script tables. Pure
 // read-only SEH-guarded; the npcobj o:on_talk(fn) wrapper does rising-edge
 // detection on top of this.
+// "Is the player's dialog window open on THIS NPC right now?"
+//
+// (2026-09-10) It used to read ONLY cCreature+0x200 bit 0x400. That bit is a
+// PULSE: measured across run 6/7 it is set for a single sample and gone 250 ms
+// later (talkprobe t=1 shows 200=0x480, t=2 shows 200=0x90 with the window
+// still wide open). A 250 ms poll therefore misses it more often than not —
+// that is why on_talk/on_answer armed in run 7 and silently never armed in
+// runs 8 and 9.
+//
+// The LEVEL signal is the conversation state machine's major state word
+// cCreature+0x150 (FUN_0052AB70, see knowledge/re/talk_trigger.md). Empirically
+// our runtime NPCs sit at **7** for the entire time their window is open and
+// drop to 0 the instant the player answers. Across every 2026-09-10 log, all 44
+// `s150=7` samples belong to the one NPC being talked to (CAP/ROCH at distance
+// <= 2) and never to a bystander — 100% specific. 6 is the value the static
+// read of the state machine predicted; accept both.
+//
+// So: level first (robust), pulse kept as a belt-and-braces fallback.
 static int l_sacred_npc_in_dialog(lua_State* L) {
     int h = (int)luaL_checkinteger(L, 1);
     int in_dlg = 0;
     uintptr_t c = sdk::player::npc_creature(h);
     if (c) {
         __try {
-            in_dlg = ((*(uint32_t*)(c + 0x200)) & 0x400u) ? 1 : 0;
+            uint16_t s150 = *(uint16_t*)(c + 0x150);
+            uint32_t f200 = *(uint32_t*)(c + 0x200);
+            in_dlg = (s150 == 6 || s150 == 7 || (f200 & 0x400u)) ? 1 : 0;
         } __except (EXCEPTION_EXECUTE_HANDLER) {
             in_dlg = 0;
         }
@@ -1814,6 +1879,19 @@ extern "C" void text_logger_learn(uint32_t hash);
 static int l_sacred_dialog_learn(lua_State* L) {
     lua_Integer h = (lua_gettop(L) >= 1 && lua_isnumber(L, 1)) ? lua_tointeger(L, 1) : 0;
     text_logger_learn((uint32_t)h);
+    return 0;
+}
+
+// sacred.dialog_speaker(handle, text_key | nil) — BY-NPC dialog-text override.
+// The vanilla node a runtime NPC shows is picked by the engine from the region
+// quest pool and differs per game, so pair the NPC itself with its text: when
+// the talk window resolves a node for the NPC the player is talking to, the
+// resolver substitutes text_key. nil unregisters. Implemented in text_logger.
+extern "C" void text_logger_dialog_speaker(int handle, const char* key);
+static int l_sacred_dialog_speaker(lua_State* L) {
+    int h = (int)luaL_checkinteger(L, 1);
+    const char* key = lua_isstring(L, 2) ? lua_tostring(L, 2) : nullptr;
+    text_logger_dialog_speaker(h, key);
     return 0;
 }
 
@@ -1929,6 +2007,61 @@ static int l_sacred_arm_spawn_teleport(lua_State* L) {
     g_tp_ov.armed = true;
     g_tp_log      = 0;   // re-enable the arg log for this load
     lua_pushboolean(L, 1);
+    return 1;
+}
+
+// NATIVE quest-compass target (2026-09-10). The engine's QuestKompassPos /
+// QuestKompassObj handlers (FUN_00499ba0 / FUN_0049a4b0, tags 0x3c/0x3f) do
+// three things our set_kompass never did: (1) write entry+0x10/+0x14 as either
+// a literal x/y OR (-1, creature handle) = "follow this creature", (2) call
+// FUN_004a6450(ECX=qm, idx) which resolves that into entry+0x18/+0x1c — the
+// fields the compass arrow actually reads (for a handle it copies the
+// creature's live position), and (3) only refresh the taskbar when idx is the
+// player's TRACKED quest (qm+0x3a4 + class*8). We do (1)-(3) minus the UI
+// event (the taskbar re-reads the entry). Call again periodically while
+// tracking a moving creature.
+typedef void (__thiscall* fn_kompass_resolve)(void* qm, unsigned idx);
+static int questbook_track_impl(uint32_t quest_id, int handle) {
+    uintptr_t mgr = g_quest_mgr;
+    if (!mgr) return -1;
+    HMODULE exe = g_attach.exe_module; if (!exe) return -1;
+    uintptr_t reb = (uintptr_t)exe - 0x00400000;
+    uint32_t C = questbook_active_class();
+    if (C == 0) { sdk_log("[questbook] track: no active class"); return -1; }
+    int cnt = questbook_count_safe();
+    if (cnt <= 0) return -1;
+    int found = -1; uintptr_t e = 0;
+    __try {
+        uintptr_t begin = *(uintptr_t*)QB_REGISTRY_BEGIN_VA;
+        for (int i = 0; i < cnt; i++) {
+            uintptr_t cand = begin + (uintptr_t)i * QB_ENTRY_STRIDE;
+            if (*(uint32_t*)(cand + QB_ENTRY_OFF_QID) == quest_id) { found = i; e = cand; break; }
+        }
+        if (found < 0) return -1;
+        if (handle > 0) {
+            *(uint32_t*)(e + 0x10) = 0xFFFFFFFFu;      // -1 = "resolve +0x14 as a creature"
+            *(uint32_t*)(e + 0x14) = (uint32_t)handle;
+        }
+        *(int32_t*)(mgr + 0x3a4 + (uintptr_t)C * 8) = found;   // tracked (primary) quest
+        ((fn_kompass_resolve)(reb + 0x004A6450))((void*)mgr, (unsigned)found);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        sdk_log("[questbook] track: faulted (quest_id=%u)", quest_id);
+        return -1;
+    }
+    uint32_t x18 = 0, x1c = 0;
+    __try { x18 = *(uint32_t*)(e + 0x18); x1c = *(uint32_t*)(e + 0x1c); }
+    __except (EXCEPTION_EXECUTE_HANDLER) {}
+    if (handle > 0 || (g_track_log_n++ % 32) == 0)
+        sdk_log("[questbook] track quest_id=%u idx=%d class=%u handle=%d -> +0x18=%u +0x1c=%u",
+                quest_id, found, C, handle, x18, x1c);
+    return 0;
+}
+
+// sacred.questbook_track(quest_id [, creature_handle]) -> bool
+static int l_sacred_questbook_track(lua_State* L) {
+    lua_Integer qid = luaL_checkinteger(L, 1);
+    int h = (lua_gettop(L) >= 2 && !lua_isnil(L, 2)) ? (int)luaL_checkinteger(L, 2) : 0;
+    lua_pushboolean(L, questbook_track_impl((uint32_t)qid, h) == 0 ? 1 : 0);
     return 1;
 }
 
@@ -2166,6 +2299,8 @@ void install_lua_api(lua_State* L) {
     lua_pushcfunction(L, l_sacred_questbook_get_id);   lua_setfield(L, -2, "questbook_get_id");
     lua_pushcfunction(L, l_sacred_questbook_set_log);  lua_setfield(L, -2, "questbook_set_log");
     lua_pushcfunction(L, l_sacred_questbook_set_kompass); lua_setfield(L, -2, "questbook_set_kompass");
+    lua_pushcfunction(L, l_sacred_questbook_track);       lua_setfield(L, -2, "questbook_track");
+    lua_pushcfunction(L, l_sacred_dialog_speaker);        lua_setfield(L, -2, "dialog_speaker");
     lua_pushcfunction(L, l_sacred_questbook_set_marker);    lua_setfield(L, -2, "questbook_set_marker");
     lua_pushcfunction(L, l_sacred_questbook_set_step_done); lua_setfield(L, -2, "questbook_set_step_done");
     lua_pushcfunction(L, l_sacred_questbook_add_log);       lua_setfield(L, -2, "questbook_add_log");
@@ -2204,6 +2339,7 @@ void install_lua_api(lua_State* L) {
     lua_pushcfunction(L, l_sacred_npc_peek);                lua_setfield(L, -2, "npc_peek");
     lua_pushcfunction(L, l_sacred_trigger_table_dump);      lua_setfield(L, -2, "trigger_table_dump");
     lua_pushcfunction(L, l_sacred_npc_in_dialog);           lua_setfield(L, -2, "npc_in_dialog");
+    lua_pushcfunction(L, l_sacred_npc_talkable);            lua_setfield(L, -2, "npc_talkable");
     lua_pushcfunction(L, l_sacred_dialog_redirect);         lua_setfield(L, -2, "dialog_redirect");
     lua_pushcfunction(L, l_sacred_dialog_learn);            lua_setfield(L, -2, "dialog_learn");
     lua_pushcfunction(L, l_sacred_dialog_override);         lua_setfield(L, -2, "dialog_override");
@@ -2232,21 +2368,74 @@ void install_lua_api(lua_State* L) {
 // (e.g. "did the hero reach the quest marker?") without per-query Lua cost.
 constexpr DWORD TICK_MIN_MS = 250;
 static DWORD g_last_tick_ms = 0;
+static unsigned long g_tick_beats = 0;
+
+// --- Lua re-entrancy guard (2026-09-10) ----------------------------------
+// One lua_State, several entry points: the engine hooks (sacred_hash, the
+// trigger trampolines) call in from deep inside engine frames, and since the
+// heartbeat landed, the 250 ms WM_TIMER calls in from the message pump. A Lua
+// handler that calls an SDK function which re-enters the engine can let the
+// pump run -> a SECOND entry on a state that is mid-call. That corrupts the
+// value stack and surfaces as nonsense errors on provably-correct lines
+// (run 8: "attempt to index a string value" from a `("..."):format()` that
+// had worked all through run 7 with byte-identical Lua). One flag: anything
+// arriving while Lua runs is DROPPED, never queued or nested.
+static volatile LONG  g_lua_busy     = 0;
+static volatile DWORD g_lua_enter_ms = 0;
+
+struct LuaEntry {
+    bool ok;
+    LuaEntry()  {
+        ok = (InterlockedCompareExchange(&g_lua_busy, 1, 0) == 0);
+        if (ok) g_lua_enter_ms = GetTickCount();
+    }
+    ~LuaEntry() { if (ok) InterlockedExchange(&g_lua_busy, 0); }
+};
+
+// Watchdog. A flag that gets stuck at 1 would silently kill EVERY on_tick for
+// the rest of the session — the exact failure mode this guard exists to end —
+// so never trust it past 5 s. (No legitimate handler batch runs that long.)
+static void lua_guard_watchdog() {
+    if (!g_lua_busy) return;
+    DWORD held = GetTickCount() - g_lua_enter_ms;
+    if (held < 5000) return;
+    sdk_log("[runtime_triggers] Lua guard held %lu ms -> force-released (watchdog)", held);
+    InterlockedExchange(&g_lua_busy, 0);
+}
+
+// lua_pcall message handler: turns "attempt to index a string value" into
+// "npcobj.lua:433: attempt to index a string value" + a full Lua traceback.
+// Cheap (only runs on error) and it ends this whole class of guesswork.
+static int lua_err_traceback(lua_State* L) {
+    const char* msg = lua_tostring(L, -1);
+    luaL_traceback(L, L, msg ? msg : "(non-string error)", 1);
+    return 1;
+}
 
 static void fire_tick() {
     if (!g_ready || !g_L) return;
     DWORD now = GetTickCount();
     if ((now - g_last_tick_ms) < TICK_MIN_MS) return;
+    lua_guard_watchdog();
+    LuaEntry lock;
+    if (!lock.ok) return;                 // already inside Lua -> skip this tick
     g_last_tick_ms = now;
     lua_State* L = g_L;
     int top0 = lua_gettop(L);
+    lua_pushcfunction(L, lua_err_traceback);
+    int eh = lua_gettop(L);
     lua_getfield(L, LUA_REGISTRYINDEX, SDK_TICK_KEY);
     if (!lua_istable(L, -1)) { lua_settop(L, top0); return; }
     int n = (int)lua_rawlen(L, -1);
+    // Heartbeat proof-of-life: one line every ~10 s. Without it there is no
+    // way to tell "handler did nothing" from "no tick ever ran" (run 8).
+    if ((g_tick_beats++ % 40) == 0)
+        sdk_log("[tick] beat #%lu  handlers=%d  tid=%lu",
+                g_tick_beats, n, GetCurrentThreadId());
     for (int i = 1; i <= n; i++) {
         lua_rawgeti(L, -1, i);
         if (!lua_isfunction(L, -1)) { lua_pop(L, 1); continue; }
-        if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
+        if (lua_pcall(L, 0, 0, eh) != LUA_OK) {
             const char* m = lua_tostring(L, -1);
             sdk_log("[runtime_triggers] on_tick handler #%d error: %s",
                     i, m ? m : "?");
@@ -2256,11 +2445,32 @@ static void fire_tick() {
     lua_settop(L, top0);
 }
 
+// Per-frame heartbeat (2026-09-10). Until now on_tick only ran as a throttled
+// side-effect of sacred_hash queries: when the player stands idle after
+// closing a dialog nothing hashes for seconds, the Lua state machine stalls,
+// and the next name resolve (hovering an enemy) is what "advances the quest".
+// hooks.cpp arms a WM_TIMER on Sacred's main window (250 ms); its TimerProc
+// runs on the game thread inside the message pump — an idle-safe point.
+void heartbeat() {
+    if (!g_ready || !g_L) return;
+    fire_tick();
+}
+
 void fire(const char* trigger_name) {
     if (!g_ready || !g_L || !trigger_name) return;
-    fire_tick();
+    fire_tick();                          // takes/releases the guard itself
+    LuaEntry lock;
+    if (!lock.ok) {                       // re-entrant: a handler is running
+        static unsigned drops = 0;
+        if (drops++ < 8)
+            sdk_log("[runtime_triggers] fire('%s') DROPPED (Lua already running)",
+                    trigger_name);
+        return;
+    }
     lua_State* L = g_L;
     int top0 = lua_gettop(L);
+    lua_pushcfunction(L, lua_err_traceback);
+    int eh = lua_gettop(L);
 
     lua_getfield(L, LUA_REGISTRYINDEX, SDK_HANDLERS_KEY);
     if (!lua_istable(L, -1)) { lua_settop(L, top0); return; }
@@ -2284,7 +2494,7 @@ void fire(const char* trigger_name) {
         lua_rawgeti(L, -2, i);            // push handler[i]
         if (!lua_isfunction(L, -1)) { lua_pop(L, 1); continue; }
         lua_pushvalue(L, ctx_idx);         // push ctx as arg
-        int r = lua_pcall(L, 1, 0, 0);
+        int r = lua_pcall(L, 1, 0, eh);
         if (r != LUA_OK) {
             const char* msg = lua_tostring(L, -1);
             sdk_log("[runtime_triggers] handler '%s' #%d error: %s",
@@ -2545,15 +2755,19 @@ extern "C" void __cdecl capture_quest_mgr(uintptr_t ecx) {
 // share the same lua_State and pcall plumbing.
 static void fire_world_load_handlers() {
     if (!g_ready || !g_L) return;
+    LuaEntry lock;
+    if (!lock.ok) { sdk_log("[runtime_triggers] on_world_load SKIPPED (Lua busy)"); return; }
     lua_State* L = g_L;
     int top0 = lua_gettop(L);
+    lua_pushcfunction(L, lua_err_traceback);
+    int eh = lua_gettop(L);
     lua_getfield(L, LUA_REGISTRYINDEX, SDK_WORLD_LOAD_KEY);
     if (!lua_istable(L, -1)) { lua_settop(L, top0); return; }
     int n = (int)lua_rawlen(L, -1);
     for (int i = 1; i <= n; i++) {
         lua_rawgeti(L, -1, i);
         if (!lua_isfunction(L, -1)) { lua_pop(L, 1); continue; }
-        int r = lua_pcall(L, 0, 0, 0);
+        int r = lua_pcall(L, 0, 0, eh);
         if (r != LUA_OK) {
             const char* msg = lua_tostring(L, -1);
             sdk_log("[runtime_triggers] on_world_load handler #%d error: %s",
@@ -3161,6 +3375,18 @@ extern "C" uint32_t sdk_current_dialog_text_hash(void) {
     return g_redir_active_hash;
 }
 
+// Last of OUR NPCs whose line the talk window resolved (text_logger notes it
+// on every override hit) + when. For a runtime NPC the pump is entered with
+// refKey == 0 on the player's answer (proven 2026-09-10 run 4: one refKey=0
+// pump call per OK click, ~1 s after the text resolve), so the answer can be
+// attributed to the noted speaker instead of the (never matching) refKey.
+static volatile int      g_dlg_note_handle = 0;
+static volatile unsigned g_dlg_note_tick   = 0;
+extern "C" void sdk_dlg_note_speaker(int handle) {
+    g_dlg_note_handle = handle;
+    g_dlg_note_tick   = GetTickCount();
+}
+
 extern "C" void __cdecl read_dialog_pump(uintptr_t entry_esp) {
     if (!entry_esp) return;
     __try {
@@ -3170,6 +3396,24 @@ extern "C" void __cdecl read_dialog_pump(uintptr_t entry_esp) {
             if (refKey && g_dlg_pump_tab[i].refKey == refKey) {
                 mi = i; break;
             }
+        if (mi < 0 && refKey == 0 && g_dlg_note_handle &&
+            (GetTickCount() - g_dlg_note_tick) < 120000u) {
+            for (int i = 0; i < g_dlg_pump_n; i++)
+                if (g_dlg_pump_tab[i].handle == g_dlg_note_handle) {
+                    const char* nm = g_dlg_pump_tab[i].name;
+                    char tok[96];
+                    tok[0]='D';tok[1]='L';tok[2]='G';tok[3]='A';tok[4]='N';
+                    tok[5]='S';tok[6]=':';
+                    int n = 0;
+                    while (n < 80 && nm[n]) { tok[7+n]=nm[n]; n++; }
+                    tok[7+n] = 0;
+                    sdk_log("[dlgpump] answer for noted speaker h=%d -> fire '%s'",
+                            g_dlg_note_handle, tok);
+                    g_dlg_note_handle = 0;          // one answer per resolve
+                    fire(tok);
+                    return;
+                }
+        }
         // FULL DIAGNOSTIC (no blind spot). The load/init refKey==0 noise
         // all occurs BEFORE the captain is registered (dlgreg → n>0). A
         // talk hit occurs AFTER. So: always log non-zero; log refKey==0

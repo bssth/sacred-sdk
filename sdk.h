@@ -339,6 +339,11 @@ namespace runtime_triggers {
     // re-bakes we just confirm the state is still the same one.
     void take_state(::lua_State* L);
 
+    // 250 ms heartbeat for sacred.on_tick, driven by a WM_TIMER on the main
+    // window (game thread, idle-safe). Idempotent/no-op until the Lua state
+    // is adopted.
+    void heartbeat();
+
     // (Re)install the engine trampoline hooks. Idempotent once they are live.
     // Called BOTH from take_state (bake worker) AND from the .text-decrypt gate
     // (dump_text) — so if the bake worker wins the race against decryption and
@@ -485,10 +490,11 @@ namespace player {
     bool dialog_arm(int handle, const char* dlg_name,
                     const char* text_key, const char* voice); // R-B replay
     bool dialog_clear(int handle);         // close dialog + clear "?!"
+    bool npc_talkable(int handle, bool on); // un/re-bind the DlgNPC object index
     bool npc_roster_add(int handle, int quest_id); // show in companion panel
     bool npc_roster_remove(int handle);            // remove from panel
     void roster_dump(const char* tag);             // read-only: dump qm+0x31c array
-    bool npc_make_companion(int handle);   // party-follow + fights for hero
+    bool npc_make_companion(int handle, bool combat = false); // follow (+combat: hireling AI)
     bool npc_dismiss(int handle);          // inverse of make_companion
     bool npc_despawn(int handle);          // clean engine removal (DelNPC)
     bool npc_set_disposition(int handle, uint32_t matrix_class); // +0x1F0

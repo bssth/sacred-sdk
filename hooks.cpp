@@ -104,6 +104,10 @@ static bool looks_like_sacred_main(HWND parent, const char* cls, int w, int h) {
     return _stricmp(cls, "Sacred") == 0;
 }
 
+static void CALLBACK sdk_heartbeat_timer(HWND, UINT, UINT_PTR, DWORD) {
+    sdk::runtime_triggers::heartbeat();
+}
+
 static HWND WINAPI hook_CreateWindowExA(
     DWORD dwExStyle, LPCSTR lpClassName, LPCSTR lpWindowName, DWORD dwStyle,
     int X, int Y, int nWidth, int nHeight,
@@ -164,6 +168,11 @@ static HWND WINAPI hook_CreateWindowExA(
         g_main_seen = true;
         g_main_modified = g_force.enable_borderless;
         sdk_log("[hook]   -> Sacred main HWND=%p (modified=%d)", h, (int)g_force.enable_borderless);
+        // on_tick heartbeat: WM_TIMER every 250 ms on the game thread (see
+        // runtime_triggers::heartbeat). Replaces the hash-query side effect
+        // that went silent whenever the player stood idle.
+        UINT_PTR t = SetTimer(h, 0x5ACD, 250, sdk_heartbeat_timer);
+        sdk_log("[hook]   -> on_tick heartbeat timer %s (id=0x5ACD, 250 ms)", t ? "armed" : "FAILED");
     }
     return h;
 }

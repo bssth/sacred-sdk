@@ -1,5 +1,24 @@
 # Quest lifecycle — making 9512 functional — 2026-05-15
 
+> **STATUS BANNER (added 2026-06-20 after the quest-system audit).** Several
+> "bugs" this doc describes in the present tense are now **FIXED IN LIVE CODE** —
+> read it as RE reference, not a TODO list:
+> - The `+0x00 = 4` SIDE-demotion (§Q1, "RECIPE (SDK fix)" / lines ~212-214):
+>   **APPLIED.** `questbook_set_log_impl` writes `+0x00 = 3` (MAIN) —
+>   `runtime_triggers.cpp:983`.
+> - Marker slot-1 → slot-3 primary (§3 "Map-marker main-vs-secondary"):
+>   **APPLIED.** `questbook_set_marker_impl` drives slot-3 (`mgr+0x7704/8`,
+>   `+0x7718=1`) and does NOT register slot-1 — `runtime_triggers.cpp:1111-1153`.
+> - Dialog refire / `dialog_arm` rewriting `cCreature+0xc` every tick (§Q3):
+>   **APPLIED (fix #1).** `dialog_arm` no longer rewrites `+0xc` —
+>   `player_state.cpp` (Path-A walker). The §Q3 present-tense bug text is stale.
+> - Dialog TEXT "architectural wall": **SOLVED** via `dialog_override` hash-swap
+>   at `FUN_0080f5e0` (`text_logger.cpp:163-196`), unrelated to this doc.
+> STILL OPEN (real): companion roster panel (qm+0x31c outer-entry creation),
+> save persistence of SDK quest state, item rewards (tag 0x37), structured
+> multi-objective progression. See the 2026-06-20 audit gap-analysis.
+
+
 Singleton `cQuestMgr` @ **0x00AACF80** (= ECX in all handlers; its
 `+0x424/+0x428` == globals `DAT_00aad3a4`/`DAT_00aad3a8`). Entry stride
 0x174, key = quest_id u32 @ entry+0x08. Active class =

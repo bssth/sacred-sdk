@@ -1,5 +1,10 @@
 # Sacred Gold — Triggers / Dialog+Voice / NPC Move+Teleport — RE report
 
+> **SUPERSEDED for dialog TEXT (banner 2026-06-20).** Any "wall" framing here for
+> showing custom dialog text is **SOLVED** via the `dialog_override` hash-swap at
+> `FUN_0080f5e0` (`text_logger.cpp:163-196`) + `Npc:say(text_key, vanilla_node)`.
+> The trigger / move / teleport RE below remains current.
+
 Target: Steam build 2.0.2.28, `sdk\Sacred_decrypted.exe`, base 0x00400000,
 no ASLR (file offset == VA − 0x400000). Evidence: Ghidra decompiles in
 `sdk/re/ghidra/decompiled/`, the static keyword-resolver tables in the
