@@ -396,6 +396,36 @@ static void* __fastcall hook_FUN_00672cf0(void* this_ptr, void* edx, const char*
     return g_tramp_672cf0(this_ptr, edx, name);
 }
 
+// FUN_00672740(this, name) -> text HANDLE (hash|0x80000000): the resolver the
+// script reader's Text op (case 0x1e of FUN_00472bc0; calls return to 0x4752f9
+// and 0x475454) uses for the WINDOW TEXT. FUN_00672cf0 above resolves the same
+// name at 0x475202, but the reader overwrites that result with this one, and
+// the window then reads global.res by the handle directly (FUN_0080eaf0), past
+// the FUN_0080f5e0 swaps. On vanilla DQ nodes the persistent by-name map hid
+// this; with the SDK's own chosen node (Dialog:Wegweiser_SD) both NPCs said
+// 'The Drunk Dragon' (2026-09-11). Same by-speaker rule as the name hook.
+typedef void* (__fastcall* f672740_t)(void* this_ptr, void* edx, const char* name);
+constexpr uintptr_t FUN_00672740_RVA = 0x00672740 - 0x00400000;
+constexpr size_t    F672740_PROLOGUE = 5;   // 8b 44 24 04 56
+static f672740_t    g_tramp_672740   = nullptr;
+
+static void* __fastcall hook_FUN_00672740(void* this_ptr, void* edx, const char* name) {
+    uintptr_t ra = (uintptr_t)_ReturnAddress();
+    if (name && ra >= 0x00475100 && ra < 0x00475680) {
+        __try {
+            int sph = 0;
+            const char* spk = speaker_lookup(&sph);
+            if (spk && _stricmp(name, spk) != 0) {
+                sdk_log("[dlgname] by-speaker TEXT override '%s' -> '%s' (h=%d)", name, spk, sph);
+                return g_tramp_672740(this_ptr, edx, spk);
+            }
+            const char* sub = override_lookup(name);       // sacred.dialog_override
+            if (sub) return g_tramp_672740(this_ptr, edx, sub);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    }
+    return g_tramp_672740(this_ptr, edx, name);
+}
+
 static wchar_t* __fastcall hook_FUN_0080f5e0(void* this_ptr, void* edx, unsigned int key) {
     uint32_t k = key & 0x7FFFFFFFu;
 
@@ -665,6 +695,21 @@ void install() {
                 sdk_log("[text_logger] dialog-name hook FAILED @ %p", (void*)t);
         } else {
             sdk_log("[text_logger] 672cf0 prologue %02x %02x %02x unexpected", c[0], c[1], c[2]);
+        }
+    }
+
+    // Hook FUN_00672740: the reader's Text-op WINDOW-TEXT resolver (see above).
+    {
+        uintptr_t t = base + FUN_00672740_RVA;
+        uint8_t* c = (uint8_t*)t;
+        if (c[0] == 0x8B && c[1] == 0x44 && c[2] == 0x24 && c[3] == 0x04 && c[4] == 0x56) {
+            if (hooks::install_trampoline(t, F672740_PROLOGUE, (void*)&hook_FUN_00672740,
+                                          (uint8_t**)&g_tramp_672740, nullptr, 0, "text_logger:672740"))
+                sdk_log("[text_logger] dialog-text hook live @ %p", (void*)t);
+            else
+                sdk_log("[text_logger] dialog-text hook FAILED @ %p", (void*)t);
+        } else {
+            sdk_log("[text_logger] 672740 prologue %02x %02x %02x unexpected", c[0], c[1], c[2]);
         }
     }
 

@@ -17,6 +17,7 @@
 // All reads are guarded by IsBadReadPtr (slow but safe) so a torn chain
 // during loading screens doesn't crash us — we just report `valid=false`.
 
+#include <string.h>
 #include "sdk.h"
 #include "engine/addresses.h"   // Goal A1: centralized engine VAs (engine::addr::*)
 #include "engine/offsets.h"     // Goal A1: centralized struct offsets (engine::off::*)
@@ -970,8 +971,11 @@ static uintptr_t dlg_entry_by_objidx(uintptr_t reb, int handle,
     uintptr_t c = npc_creature(handle);
     if (!c) return 0;
     uint32_t idx = 0;
-    if (!safe_read<uint32_t>(c + 0x244, &idx)) return 0;
-    idx = (idx >> 8) & 0xff;                       // +0x245 byte
+    // +0x245 is a DWORD: FUN_005498F0 stores it with a 32-bit mov and every engine
+    // access is 32-bit. The old byte read returned idx & 0xFF; dialog_arm fed that
+    // into FUN_00463240, which re-stamped the creature onto the VANILLA element at
+    // idx & 0xFF (S0b 2026-09-11, .claude/knowledge/quests/LIVE_S0_RESULTS.md).
+    if (!safe_read<uint32_t>(c + 0x245, &idx)) return 0;
     if (out_idx) *out_idx = (int)idx;
     if (!safe_read_ptr(qm + 0x755c, &b) || !b) return 0;
     if (!safe_read_ptr(qm + 0x7560, &e) || e < b) return 0;
@@ -1435,7 +1439,26 @@ typedef void (__thiscall* fn_vec_grow)(void* hdr, void* insertPos,
 typedef void (__thiscall* fn_bind4c)(void* qm, unsigned idx, uint32_t v);
 typedef void (__thiscall* fn_stamp_idx)(void* cCreature, int idx, char net);
 
-int dlgnpc_bind(int handle, const char* name, int marker_on) {
+// Index of the section named `name` in the engine's section table (DAT_00aab708:
+// begin/end 0xAAB708/0xAAB70C, stride 0x54, name[64] first), by FUN_00460590's
+// rules: case-insensitive whole name, first match. -1 if absent. Entry 0 is the
+// table's empty section and is never returned.
+static int find_section_index(uintptr_t reb, const char* name) {
+    if (!name || !*name) return -1;
+    __try {
+        uintptr_t b = *(uintptr_t*)(reb + 0x00AAB708);
+        uintptr_t e = *(uintptr_t*)(reb + 0x00AAB70C);
+        if (!b || e < b) return -1;
+        unsigned n = (unsigned)((e - b) / 0x54);
+        for (unsigned i = 1; i < n; i++) {
+            const char* sname = (const char*)(b + (uintptr_t)i * 0x54);
+            if (_strnicmp(sname, name, 64) == 0) return (int)i;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    return -1;
+}
+
+int dlgnpc_bind(int handle, const char* name, int marker_on, const char* node) {
     HMODULE exe = g_attach.exe_module;
     if (!exe || handle <= 0) return -1;
     uintptr_t reb = reinterpret_cast<uintptr_t>(exe) - 0x00400000;
@@ -1463,7 +1486,15 @@ int dlgnpc_bind(int handle, const char* name, int marker_on) {
     *(int32_t*)(elem + 0x00) = handle;                       // bound handle
     if (name) { unsigned i = 0; for (; name[i] && i < 0x3F; ++i)
                     elem[0x04 + i] = (uint8_t)name[i]; }
-    *(uint32_t*)(elem + 0x44) = 0;                            // content id
+    // +0x44 = the Dialog: section this element resolves to. FUN_0046b480 falls back
+    // to it when no section is named "Dialog:<name>" or "<name>" (ours never are);
+    // 0 is the empty section = no window. The caller picks it by name, so the NPC
+    // talks through a KNOWN node, not whatever vanilla element a truncated index hit.
+    int sec_idx = find_section_index(reb, node);
+    if (node && *node)
+        sdk_log("[dlgbind] h=%d '%s' node '%s' -> section %d%s", handle, name ? name : "",
+                node, sec_idx, sec_idx > 0 ? "" : " (NOT FOUND: the NPC opens no window)");
+    *(uint32_t*)(elem + 0x44) = (uint32_t)(sec_idx > 0 ? sec_idx : 0);   // section
     *(uint32_t*)(elem + 0x48) = marker_on ? 0x0Bu : 0x0Du;    // marker
     *(int32_t*) (elem + 0x4c) = handle;                       // state
 

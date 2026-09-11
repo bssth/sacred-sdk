@@ -1595,7 +1595,10 @@ static int l_sacred_npc_bind_quest(lua_State* L) {
     int h = (int)luaL_checkinteger(L, 1);
     const char* n = luaL_optstring(L, 2, "");
     int on = (lua_gettop(L) < 3) ? 1 : (lua_toboolean(L, 3) ? 1 : 0);
-    int idx = sdk::player::dlgnpc_bind(h, n, on);
+    // arg 4 (optional): the Dialog: section the NPC talks through (npcobj passes
+    // M.DEFAULT_DIALOG_NODE); nil/absent = none, the NPC then opens no window.
+    const char* node = (lua_gettop(L) >= 4 && lua_isstring(L, 4)) ? lua_tostring(L, 4) : nullptr;
+    int idx = sdk::player::dlgnpc_bind(h, n, on, node);
     if (idx < 0) { lua_pushnil(L); return 1; }
     lua_pushinteger(L, idx);
     return 1;
@@ -1741,7 +1744,9 @@ static int l_sacred_arm_hwbp(lua_State* L) {
         __try {
             uintptr_t qm  = 0x00AACF80;
             uintptr_t db  = *(uintptr_t*)(qm + 0x755c);
-            uint8_t   oix = *(uint8_t*)(cre + 0x245);
+            uint32_t  oix = *(uint32_t*)(cre + 0x245);   // a DWORD (LIVE_S0_RESULTS 1)
+            uintptr_t de  = *(uintptr_t*)(qm + 0x7560);
+            if (db && de >= db && oix >= (uint32_t)((de - db) / 0x50)) { lua_pushboolean(L, 0); return 1; }
             if (!db) { lua_pushboolean(L, 0); return 1; }
             addr = db + (uintptr_t)oix * 0x50 + 0x4c;
         } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -1792,7 +1797,7 @@ static int l_sacred_npc_peek(lua_State* L) {
     if (c) {
         __try {
             v14  = *(uint32_t*)(c + 0x14);
-            v245 = *(uint8_t*) (c + 0x245);
+            v245 = *(uint32_t*)(c + 0x245);
             vC   = *(uint32_t*)(c + 0x0c);
             v204 = *(uint32_t*)(c + 0x204);
             v150 = *(uint16_t*)(c + 0x150);
@@ -3234,7 +3239,7 @@ extern "C" void __cdecl read_dialog_answer(uintptr_t entry_esp) {
             sdk_log("[dlganswer] cre=%p -> no handle", (void*)cre);
             return;
         }
-        uint8_t idx = *(uint8_t*)(cre + 0x245);           // DlgNPC idx
+        uint32_t idx = *(uint32_t*)(cre + 0x245);         // DlgNPC idx (DWORD)
         uintptr_t db = *(uintptr_t*)(0x00AACF80 + 0x755c);
         uintptr_t de = *(uintptr_t*)(0x00AACF80 + 0x7560);
         if (!db || de < db) {
@@ -3478,7 +3483,7 @@ extern "C" void __cdecl read_dialog_drv(uintptr_t thisptr) {
     __try {
         uintptr_t cre = *(uintptr_t*)(thisptr + 4);
         if (cre < 0x10000) return;
-        uint32_t v245 = *(uint8_t*) (cre + 0x245);
+        uint32_t v245 = *(uint32_t*)(cre + 0x245);
         uint32_t vC   = *(uint32_t*)(cre + 0x0c);
         uint32_t v14  = *(uint32_t*)(cre + 0x14);
         // om reverse-map creature -> SDK handle (read_dialog_answer ptn)

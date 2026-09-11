@@ -486,7 +486,7 @@ namespace player {
     bool npc_teleport(int handle, int32_t kx, int32_t ky); // engine TP, any NPC
     bool npc_equip(int handle, int item_type, int slot);   // EXPERIMENTAL
     int  createnpc_engine(const uint8_t* payload, size_t plen, int want_type); // engine CreateNPC -> handle|0
-    int  dlgnpc_bind(int handle, const char* name, int marker_on); // -> dlg idx | -1
+    int  dlgnpc_bind(int handle, const char* name, int marker_on, const char* node = nullptr); // -> dlg idx | -1
     bool dialog_arm(int handle, const char* dlg_name,
                     const char* text_key, const char* voice); // R-B replay
     bool dialog_clear(int handle);         // close dialog + clear "?!"
