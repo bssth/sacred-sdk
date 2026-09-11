@@ -552,18 +552,15 @@ static int l_ctx_notify(lua_State* L) {
 }
 
 // -------------------------------------------------------------------------
-// Named-state bindings — forwards into [cQuestManager+0x334..+0x338].
+// Named-POSITION bindings — [cQuestManager+0x334..+0x338], stride 0x64.
+// This is the table tag 0x17 DefPos fills (pos_*, LOC_RG*), with X, Y, radius
+// and Z at +0x44..+0x50 (.claude/knowledge/quests/RE_conditions_vars.md §2.7).
+// It is NOT the script-variable table: variables are sacred.var_* and
+// ctx:get_var / ctx:set_var (sdk_vars.inc).
 //
-// Lua surface (both global and ctx-method form):
 //   sacred.state_dump()                       -> count (also logs to file)
-//   sacred.state_get(name)                    -> {v1, v2, v3, v4} or nil
+//   sacred.state_get(name)                    -> {x, y, r, z} or nil
 //   sacred.state_set(name, v0[, v1, v2, v3])  -> bool (in-place only)
-//   ctx:get_var(name)                         -> first value (int) or nil
-//   ctx:set_var(name, v0[, v1, v2, v3])       -> bool
-//
-// `state_get` returns the FULL 4-int array because some quest variables
-// pack multiple values into one slot. `ctx:get_var` returns just the first
-// value as an integer because that's what 90 % of script logic wants.
 // -------------------------------------------------------------------------
 
 // Caller owns the buffer; we cap at 256 rows to keep stack pressure in check.
@@ -1541,6 +1538,7 @@ static int l_sacred_npc_talkable(lua_State* L) {
 
 // SDK-owned script sections: own Dialog: nodes and button handlers.
 #include "sdk_sections.inc"
+#include "sdk_vars.inc"      // script variables + savegame hooks (uses the sections helpers)
 
 // sacred.npc_roster_add(handle, quest_id) -> bool  (companion panel)
 static int l_sacred_npc_roster_add(lua_State* L) {
@@ -2012,8 +2010,17 @@ static int l_sacred_arm_spawn_teleport(lua_State* L) {
     } else {
         g_tp_ov.until_ms = 0;            // one-shot
     }
-    g_tp_ov.armed = true;
-    g_tp_log      = 0;   // re-enable the arg log for this load
+    g_tp_ov.armed  = true;
+    g_tp_log       = 0;             // re-enable the arg log for this load
+    g_tp_arm_loads = g_qs_loads;    // a savegame load after this cancels it
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+// sacred.disarm_spawn_teleport() -> true. Drops a pending spawn hijack.
+static int l_sacred_disarm_spawn_teleport(lua_State* L) {
+    if (g_tp_ov.armed) sdk_log("[tp] spawn hijack disarmed");
+    g_tp_ov.armed = false;
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -2233,28 +2240,11 @@ static int l_sacred_state_set(lua_State* L) {
     return 1;
 }
 
-// ctx:get_var(name) — convenience: returns just the FIRST value as integer.
-// Use sacred.state_get(name) if you need the full 4-int array.
-static int l_ctx_get_var(lua_State* L) {
-    const char* name = luaL_checkstring(L, 2);   // ctx is arg 1
-    uintptr_t e = state_find(name);
-    if (!e) { lua_pushnil(L); return 1; }
-    int32_t v;
-    __try { v = *(int32_t*)(e + STATE_OFF_VALUES); }
-    __except (EXCEPTION_EXECUTE_HANDLER) { lua_pushnil(L); return 1; }
-    lua_pushinteger(L, v);
-    return 1;
-}
-
-static int l_ctx_set_var(lua_State* L) {
-    const char* name = luaL_checkstring(L, 2);   // ctx is arg 1
-    int32_t vals[STATE_VALUE_COUNT];
-    int n = collect_values(L, 3, vals, STATE_VALUE_COUNT);
-    if (n == 0) return luaL_error(L, "ctx:set_var('%s'): need at least one value", name);
-    bool ok = state_write_in_place(name, n, vals);
-    lua_pushboolean(L, ok ? 1 : 0);
-    return 1;
-}
+// ctx:get_var(name) / ctx:set_var(name, value): the script VARIABLES, the same
+// as sacred.var_get / var_set (sdk_vars.inc). Until 2026-09-11 these read the
+// named-position table by mistake (SDK_GAPS gap 13).
+static int l_ctx_get_var(lua_State* L) { return var_lua_get(L, 2); }   // ctx is arg 1
+static int l_ctx_set_var(lua_State* L) { return var_lua_set(L, 2); }
 
 // Build the ctx table once at state setup; fire() reuses it across calls.
 // Each fire() mutates `ctx.trigger_name` to the current name BEFORE the
@@ -2349,6 +2339,13 @@ void install_lua_api(lua_State* L) {
     lua_pushcfunction(L, l_sacred_npc_in_dialog);           lua_setfield(L, -2, "npc_in_dialog");
     lua_pushcfunction(L, l_sacred_npc_talkable);            lua_setfield(L, -2, "npc_talkable");
     lua_pushcfunction(L, l_sacred_section_define);          lua_setfield(L, -2, "section_define");
+    lua_pushcfunction(L, l_sacred_var_get);                 lua_setfield(L, -2, "var_get");
+    lua_pushcfunction(L, l_sacred_var_set);                 lua_setfield(L, -2, "var_set");
+    lua_pushcfunction(L, l_sacred_var_inc);                 lua_setfield(L, -2, "var_inc");
+    lua_pushcfunction(L, l_sacred_var_dec);                 lua_setfield(L, -2, "var_dec");
+    lua_pushcfunction(L, l_sacred_vars);                    lua_setfield(L, -2, "vars");
+    lua_pushcfunction(L, l_sacred_var_dump);                lua_setfield(L, -2, "var_dump");
+    lua_pushcfunction(L, l_sacred_disarm_spawn_teleport);   lua_setfield(L, -2, "disarm_spawn_teleport");
     lua_pushcfunction(L, l_sacred_dialog_redirect);         lua_setfield(L, -2, "dialog_redirect");
     lua_pushcfunction(L, l_sacred_dialog_learn);            lua_setfield(L, -2, "dialog_learn");
     lua_pushcfunction(L, l_sacred_dialog_override);         lua_setfield(L, -2, "dialog_override");
@@ -2462,6 +2459,7 @@ static void fire_tick() {
 // runs on the game thread inside the message pump — an idle-safe point.
 void heartbeat() {
     if (!g_ready || !g_L) return;
+    vars_tick();              // savegame hooks: patch once, SDK:SAVE_LOADED after a load
     sections_tick();          // SDK sections: patch once, keep injected, run button callbacks
     fire_tick();
 }
@@ -2663,9 +2661,10 @@ volatile bool g_hide_vanilla         = false;   // gate journal suppression
 //   * +0x424..+0x428   stride 0x174   key=quest_id u32 at entry+8
 //                      → quest-display registry (the "journal")
 //   * +0x334..+0x338   stride 0x64    key=cstring name at entry+4
-//                      → named-state store ("hq_uw", "dq_belohnung", …)
-//                        used by FunkCode tag 0x69 (VarAssign_int) and
-//                        consumed by guard-eval paths.
+//                      → the named-POSITION table (tag 0x17 DefPos:
+//                        pos_*, LOC_RG*; X/Y/radius/Z at +0x44..+0x50).
+//                        Not the script variables: those are qm+0x7550,
+//                        sdk_vars.inc (RE_conditions_vars.md §2.7).
 //
 // FUN_00478780 is the upsert routine for the named-state store: lookup by
 // strcmp on entry+4, write 100 bytes from a stack-built record into the
@@ -3705,6 +3704,13 @@ extern "C" void __cdecl engine_tp_filter(uintptr_t this_, int* args) {
             sdk_log("[tp] FUN_0054d9d0 this=%p hero=%p%s xy=(%d,%d) "
                     "lvl=%d flag=%d", (void*)this_, (void*)hero,
                     is_hero ? " <HERO>" : "", x, y, lvl, flag);
+        }
+        if (g_tp_ov.armed && is_hero && g_qs_loads != g_tp_arm_loads) {
+            // A savegame loaded after the hijack was armed: that hero belongs
+            // where the save put him. Never move him.
+            g_tp_ov.armed = false;
+            sdk_log("[tp] savegame loaded since the spawn hijack was armed: "
+                    "hijack cancelled, hero keeps (%d,%d)", x, y);
         }
         if (g_tp_ov.armed && is_hero) {
             // until_ms == 0  → ONE-SHOT: rewrite the first hero teleport
