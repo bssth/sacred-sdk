@@ -165,7 +165,9 @@ def dump_record(off, tag, size, payload, indent=2, ops_limit=40, hex_too=False,
     idx = f"#{index} " if index is not None else ""
     emit(f"\n{sp}{marker}{idx}{off:08x}  tag=0x{tag:02x}'{tch}' [{lbl}]  "
          f"size={size}  payload={size-3}B")
-    ops, _, end_ip = disasm_payload(payload, indent=indent + 4, limit=ops_limit)
+    # tag= : tags 0x28/0x29/0x2f are raw walker layouts, not opcode streams
+    # (funkcode_disasm.RAW_LAYOUTS); without it they mis-decode.
+    ops, _, end_ip = disasm_payload(payload, indent=indent + 4, limit=ops_limit, tag=tag)
     for ln in ops:
         emit(ln)
     if hex_too:

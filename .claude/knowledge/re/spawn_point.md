@@ -3,6 +3,46 @@
 Target: Steam build 2.0.2.28, `sdk\Sacred_decrypted.exe`, base 0x00400000,
 no ASLR (file offset == VA − 0x400000).
 
+> **[2026-09-11, wave-2 note — read before using any `DefPos.bin` statement below.]**
+> The body of this file is unchanged. These corrections come from
+> `sdk/.claude/knowledge/quests/AUDIT.md` Severity 1 and `sdk/re/py/startcode.py`.
+>
+> 1. **`DefPos.bin` is written by the engine at runtime; it is not shipped data.**
+>    * When the file's first dword is not `0x4D2` (or its third count is ≤ 9),
+>      `FUN_0046f9b0:196-348` pre-scans `StartCode.bin` then `FunkCode.bin` and
+>      writes the file: the magic, the 100-byte position table, the 80-byte
+>      DlgNPC table and a 76-byte table.
+>    * On this install the 12 files with the magic word all have post-install
+>      mtimes, and each equals `startcode.positions(src, include_funkcode=True)`
+>      exactly. The 8 without it have the install mtime
+>      (`quests/CLASS_DIFFS.md` §11).
+>    * So the "Per-class magic survey" below is a snapshot of cache state, not
+>      content.
+> 2. **VAMPIRELADY.** The reading below ("magic 1921 (0x781)", 1,146,348 B,
+>    0xCC-padded) matches the shipped two-array layout, whose first dword is the
+>    array-0 count: 4 + 1921×100 + 4 + 11,928×80 = 1,146,348 exactly. That is the
+>    same shape as the 8 install-dated files.
+>    * The file on disk now is the engine's 601,592-byte rewrite (mtime
+>      2026-05-16 03:41). This file's own mtime (2026-06-13) is a later edit of
+>      an earlier draft, so which state it measured cannot be told.
+>    * The wave-1 `quests/CLASS_DIFFS.md` §11 "correction" of this file called
+>      VAMPIRELADY "a normal file" and the no-magic addon/net files "the odd ones
+>      out". That had the polarity reversed.
+>    * That correction was never applied to this file and has been withdrawn in
+>      CLASS_DIFFS.md, so nothing here needs reverting.
+> 3. **Named positions:** use `startcode.positions(src, include_funkcode=True)`.
+>    * "Upstream source = StartCode.bin tag 0x17" below is incomplete: 483 of the
+>      1,921 `base:VAMPIRELADY` names are added by FunkCode tag-`0x17` records.
+>    * The optional third and fourth ints of a tag-`0x17` record are the scatter
+>      radius R (`+0x4C`) and the level Z (`+0x50`).
+> 4. **Array-0 fields.** `+0x40` "const 40", `+0x54` "reserved" and `+0x58`
+>    "const 4096" are uninitialised stack bytes. `FUN_00478780` builds the entry
+>    in a stack local and writes only `+0x00`, the name and `+0x44…+0x50`
+>    (`startcode.py`; `quests/OPEN_QUESTIONS_wave1.md` Q62/Q74).
+> 5. **Options B and C** conflict with the bake policy (`quests/README.md` §7).
+>    In-place byte patching of a shipped `.bin` is not allowed, and `DefPos.bin`
+>    is a cache the engine rewrites. Option A (a runtime write) is unaffected.
+
 > Supersedes the earlier VAMPIRELADY-only draft. Key correction: the prior
 > draft concluded "DefPos is a 0xCC-padded string table, not the 100-byte
 > SERAPHIM layout". That was true *only for VAMPIRELADY*, which uniquely

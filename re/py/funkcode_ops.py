@@ -1,10 +1,25 @@
 """Structured opcode (de)serializer for Sacred FunkCode.
 
-Pairs with `funkcode_disasm.OPCODE_TABLE`. The disassembler in funkcode_disasm
-returns pretty strings for the human-readable trace; this module gives us
-**structured** args (`u32`, `u8`, list-of-strings, raw-tail-bytes) plus a
-matching encoder. That's what lets `funkcode_compile.py` accept mnemonic
-opcode lines like `OP U32_qid_a 9511` and re-emit the same bytes.
+FROZEN VOCABULARY (2026-09-11). This module used to import
+`funkcode_disasm.OPCODE_TABLE`; it now carries its own copy of that table as
+it stood before the disassembler was corrected (`LEGACY_OPCODE_TABLE` below).
+Reason: `sdk/lua_bake_opcodes.inc` -- the in-DLL Lua baker's opcode table --
+is a row-for-row C++ copy of this label vocabulary, so the labels and arg
+shapes emitted by `funkcode_decompile.py` / `funkcode_decompile_lua.py` /
+`funkcode_decompile_semantic.py` must not change unless that .inc changes in
+the same commit. The vocabulary is byte-exact (every OP line assembles back to
+the original bytes, and `_try_mnemonic_emit` verifies that per record), but it
+does NOT describe the engine's operand grammar: e.g. `DLG_OP_a` takes "two
+strings" where the field reader FUN_00472bc0 reads one. For the engine's
+grammar use `funkcode_disasm.GRAMMAR` / `tile_payload`; each GRAMMAR row names
+its legacy label. `disasm_tiling_check.py` asserts this table still equals the
+.inc.
+
+The disassembler in funkcode_disasm returns pretty strings for the
+human-readable trace; this module gives us **structured** args (`u32`, `u8`,
+list-of-strings, raw-tail-bytes) plus a matching encoder. That's what lets
+`funkcode_compile.py` accept mnemonic opcode lines like `OP U32_qid_a 9511`
+and re-emit the same bytes.
 
 The format of `args` per kind:
 
@@ -40,7 +55,177 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
-from funkcode_disasm import OPCODE_TABLE, STACK_OPS
+
+
+# --- FROZEN legacy table: op -> (group, kind, width, label) ---------------
+# Verbatim copy of the effective funkcode_disasm.OPCODE_TABLE as of
+# 2026-09-11, before the disassembler was corrected (i.e. after its duplicate
+# keys 0x3b/0x73/0x67 were overwritten and the STACK_OPS loop ran, which also
+# turned 0x1f into a stack op). Row-for-row identical to
+# sdk/lua_bake_opcodes.inc -- DO NOT EDIT one without the other.
+LEGACY_OPCODE_TABLE = {
+    0x00: (0, 'halt', 0, 'END'),
+    0x01: (1, 'cstr2', None, 'DLG_OP_a'),
+    0x02: (2, 'const', 4, 'U32_TRG'),
+    0x03: (3, 'const', 2, 'FMT3_a'),
+    0x04: (4, 'cstr1+5', 5, 'HERO_OP_a'),
+    0x05: (5, 'const', 0, 'MATH_a'),
+    0x06: (6, 'stack', 0, 'STACK_06'),
+    0x07: (6, 'stack', 0, 'STACK_07'),
+    0x08: (6, 'stack', 0, 'STACK_08'),
+    0x09: (5, 'const', 0, 'MATH_b'),
+    0x0a: (3, 'const', 2, 'FMT3_b'),
+    0x0b: (7, 'const', 4, 'U32_qid_a'),
+    0x0c: (4, 'cstr1+5', 5, 'HERO_OP_b'),
+    0x0d: (4, 'cstr1+5', 5, 'HERO_OP_c'),
+    0x0e: (6, 'stack', 0, 'STACK_0E'),
+    0x0f: (6, 'stack', 0, 'STACK_0F'),
+    0x10: (6, 'stack', 0, 'STACK_10'),
+    0x11: (8, 'const', 4, 'U32_a'),
+    0x12: (6, 'stack', 0, 'STACK_12'),
+    0x13: (6, 'stack', 0, 'STACK_13'),
+    0x14: (6, 'stack', 0, 'STACK_14'),
+    0x15: (9, 'const', 8, 'U32PAIR_a'),
+    0x16: (10, 'cstr1', 0, 'BlockMarker'),
+    0x19: (12, 'const', 12, 'U32_TRIPLE'),
+    0x1a: (6, 'stack', 0, 'STACK_1A'),
+    0x1b: (6, 'stack', 0, 'STACK_1B'),
+    0x1c: (13, 'const', 4, 'U32_d'),
+    0x1d: (14, 'cstr1', 0, 'RES_LOOKUP_C'),
+    0x1e: (15, 'cstr1', 0, 'STR_REF'),
+    0x1f: (6, 'stack', 0, 'STACK_1F'),
+    0x20: (17, 'const', 12, 'XYZ_a'),
+    0x23: (6, 'stack', 0, 'STACK_23'),
+    0x24: (6, 'stack', 0, 'STACK_24'),
+    0x25: (6, 'stack', 0, 'STACK_25'),
+    0x26: (6, 'stack', 0, 'STACK_26'),
+    0x27: (6, 'stack', 0, 'STACK_27'),
+    0x28: (18, 'const', 1, 'C1_a'),
+    0x29: (1, 'cstr2', None, 'DLG_OP_b'),
+    0x2a: (17, 'const', 12, 'XYZ_b'),
+    0x2b: (6, 'stack', 0, 'STACK_2B'),
+    0x2c: (6, 'stack', 0, 'STACK_2C'),
+    0x2d: (6, 'stack', 0, 'STACK_2D'),
+    0x2e: (6, 'stack', 0, 'STACK_2E'),
+    0x2f: (6, 'stack', 0, 'STACK_2F'),
+    0x30: (6, 'stack', 0, 'STACK_30'),
+    0x31: (6, 'stack', 0, 'STACK_31'),
+    0x32: (6, 'stack', 0, 'STACK_32'),
+    0x33: (19, 'const', 8, 'U32PAIR_b'),
+    0x34: (20, 'const', 8, 'U32PAIR_f'),
+    0x35: (21, 'const', 0, 'CMD_35'),
+    0x36: (8, 'const', 4, 'U32_b'),
+    0x37: (22, 'halt', 0, 'HALT'),
+    0x38: (7, 'const', 4, 'U32_qid_b'),
+    0x39: (6, 'stack', 0, 'STACK_39'),
+    0x3a: (24, 'cstr2', 0, 'ResLookup_3a'),
+    0x3b: (25, 'const', 4, 'U32_3b'),
+    0x3c: (26, 'const', 4, 'HERO_REF'),
+    0x3d: (27, 'const', 16, 'U32_QUAD'),
+    0x3e: (28, 'cstr1+1', 1, 'VAR_LOOKUP_a'),
+    0x3f: (6, 'stack', 0, 'STACK_3F'),
+    0x40: (29, 'cstr1+1', 1, 'RES_LOOKUP_a'),
+    0x41: (5, 'const', 0, 'MATH_c'),
+    0x42: (6, 'stack', 0, 'STACK_42'),
+    0x43: (6, 'stack', 0, 'STACK_43'),
+    0x44: (6, 'stack', 0, 'STACK_44'),
+    0x45: (6, 'stack', 0, 'STACK_45'),
+    0x46: (6, 'stack', 0, 'STACK_46'),
+    0x47: (30, 'const', 1, 'STR_LOOKUP_a'),
+    0x48: (31, 'u32+cstr1', 4, 'EMIT_a'),
+    0x49: (31, 'u32+cstr1', 4, 'EMIT_b'),
+    0x4a: (31, 'u32+cstr1', 4, 'EMIT_c'),
+    0x4b: (22, 'halt', 0, 'BREAK'),
+    0x4c: (6, 'stack', 0, 'STACK_4C'),
+    0x4d: (17, 'const', 12, 'XYZ_c'),
+    0x4e: (6, 'stack', 0, 'STACK_4E'),
+    0x4f: (6, 'stack', 0, 'STACK_4F'),
+    0x50: (6, 'stack', 0, 'STACK_50'),
+    0x51: (6, 'stack', 0, 'STACK_51'),
+    0x52: (30, 'const', 1, 'STR_LOOKUP_b'),
+    0x53: (13, 'const', 4, 'U32_e'),
+    0x54: (13, 'const', 4, 'U32_f'),
+    0x55: (13, 'const', 4, 'U32_g'),
+    0x56: (13, 'const', 4, 'U32_h'),
+    0x57: (13, 'const', 4, 'U32_i'),
+    0x58: (6, 'stack', 0, 'STACK_58'),
+    0x59: (6, 'stack', 0, 'STACK_59'),
+    0x5a: (6, 'stack', 0, 'STACK_5A'),
+    0x5b: (6, 'stack', 0, 'STACK_5B'),
+    0x5c: (6, 'stack', 0, 'STACK_5C'),
+    0x5d: (31, 'u32+cstr1', 4, 'EMIT_d'),
+    0x5e: (31, 'u32+cstr1', 4, 'EMIT_e'),
+    0x5f: (7, 'const', 4, 'U32_qid_c'),
+    0x60: (5, 'const', 0, 'MATH_d'),
+    0x61: (6, 'stack', 0, 'STACK_61'),
+    0x62: (6, 'stack', 0, 'STACK_62'),
+    0x63: (1, 'cstr2', None, 'DLG_OP_c'),
+    0x64: (6, 'stack', 0, 'STACK_64'),
+    0x65: (6, 'stack', 0, 'STACK_65'),
+    0x66: (6, 'stack', 0, 'STACK_66'),
+    0x67: (32, 'cstr1', 0, 'VAR_LOOKUP_67'),
+    0x68: (1, 'cstr2', None, 'DLG_OP_d'),
+    0x69: (1, 'cstr2', None, 'DLG_OP_e'),
+    0x6a: (1, 'cstr2', None, 'DLG_OP_f'),
+    0x6b: (3, 'const', 2, 'FMT3_c'),
+    0x6c: (3, 'const', 2, 'FMT3_d'),
+    0x6d: (31, 'u32+cstr1', 4, 'EMIT_f'),
+    0x6e: (31, 'u32+cstr1', 4, 'EMIT_g'),
+    0x6f: (33, 'u32+cstr2', 4, 'ResLookup_6f'),
+    0x70: (6, 'stack', 0, 'STACK_70'),
+    0x71: (23, 'const', 0, 'InternalGoto_71'),
+    0x72: (6, 'stack', 0, 'STACK_72'),
+    0x73: (25, 'const', 4, 'U32_73'),
+    0x74: (6, 'stack', 0, 'STACK_74'),
+    0x75: (8, 'const', 4, 'U32_c'),
+    0x77: (28, 'cstr1+1', 1, 'VAR_LOOKUP_b'),
+    0x78: (6, 'stack', 0, 'STACK_78'),
+    0x79: (20, 'const', 8, 'U32PAIR_g'),
+    0x7a: (34, 'u32+cstr1', 4, 'ResLookup_7a'),
+    0x7b: (6, 'stack', 0, 'STACK_7B'),
+    0x7c: (6, 'stack', 0, 'STACK_7C'),
+    0x7d: (30, 'const', 1, 'STR_LOOKUP_c'),
+    0x7e: (35, 'const', 4, 'U32_k'),
+    0x7f: (35, 'const', 4, 'U32_l'),
+    0x80: (6, 'stack', 0, 'STACK_80'),
+    0x81: (28, 'cstr1+1', 1, 'VAR_LOOKUP_c'),
+    0x82: (28, 'cstr1+1', 1, 'VAR_LOOKUP_d'),
+    0x83: (5, 'const', 0, 'MATH_e'),
+    0x84: (36, 'const', 4, 'U32_o'),
+    0x85: (6, 'stack', 0, 'STACK_85'),
+    0x86: (13, 'const', 4, 'U32_j'),
+    0x87: (19, 'const', 8, 'U32PAIR_c'),
+    0x88: (19, 'const', 8, 'U32PAIR_d'),
+    0x89: (19, 'const', 8, 'U32PAIR_e'),
+    0x8a: (6, 'stack', 0, 'STACK_8A'),
+    0x8b: (37, 'const', 1, 'U8_8b'),
+    0x8c: (35, 'const', 4, 'U32_m'),
+    0x8d: (6, 'stack', 0, 'STACK_8D'),
+    0x8e: (6, 'stack', 0, 'STACK_8E'),
+    0x8f: (30, 'const', 1, 'STR_LOOKUP_d'),
+    0x90: (35, 'const', 4, 'U32_n'),
+    0x91: (6, 'stack', 0, 'STACK_91'),
+    0x92: (38, 'cstr1+1', 1, 'CMD_92'),
+    0x93: (39, 'const', 2, 'FMT3_g'),
+    0x95: (29, 'cstr1', 0, 'ResLookup_95'),
+    0x96: (6, 'stack', 0, 'STACK_96'),
+    0x97: (6, 'stack', 0, 'STACK_97'),
+    0x98: (6, 'stack', 0, 'STACK_98'),
+    0x99: (6, 'stack', 0, 'STACK_99'),
+    0x9a: (6, 'stack', 0, 'STACK_9A'),
+    0x9b: (3, 'const', 2, 'FMT3_e'),
+    0x9c: (3, 'const', 2, 'FMT3_f'),
+    0x9d: (1, 'cstr2', None, 'DLG_OP_g'),
+    0x9e: (6, 'stack', 0, 'STACK_9E'),
+    0x9f: (40, 'const', 3, 'C3_b'),
+    0xa0: (6, 'stack', 0, 'STACK_A0'),
+    0xa1: (6, 'stack', 0, 'STACK_A1'),
+}
+LEGACY_STACK_OPS = frozenset(op for op, row in LEGACY_OPCODE_TABLE.items() if row[1] == "stack")
+
+# names kept for callers of this module
+OPCODE_TABLE = LEGACY_OPCODE_TABLE
+STACK_OPS = LEGACY_STACK_OPS
 
 
 # --- inverse table: label -> (op, kind, width) ----------------------------
