@@ -165,6 +165,9 @@
     <ClCompile Include="player_state.cpp" />
     <ClCompile Include="engine\hero.cpp" />
     <ClCompile Include="engine\debug.cpp" />
+    <ClCompile Include="engine\build_profile.cpp" />
+    <ClCompile Include="core\config.cpp" />
+    <ClCompile Include="patchset\patchset.cpp" />
     <ClCompile Include="patches.cpp" />
     <ClCompile Include="text_logger.cpp" />
     <ClCompile Include="ddraw_hooks.cpp" />

@@ -5,6 +5,7 @@
 // patch the IAT slots directly — no MinHook / Detours / vtable surgery.
 
 #include "sdk.h"
+#include "core/config.h"
 #include "iat_hook.h"
 #include <unknwn.h>
 
@@ -37,49 +38,20 @@ volatile bool g_main_modified = false;
 static bool g_main_overridden = false;
 
 // --- sdk.ini reader -------------------------------------------------------
-// Tiny INI parser tailored to our minimal needs. Format:
-//   [hooks]
-//   force_borderless=1
-//   force_width=1920
-//   force_height=1080
-//   swallow_displaymode=1
-//
-// Lookup is exe_dir\sdk.ini. Anything missing keeps defaults.
+// Display config. The parsing lives in core/config.cpp now — this just maps
+// the keys onto ForceConfig. Keys are read from the [hooks] section but fall
+// back to a bare key, so an existing sectionless sdk.ini keeps working.
 static void load_config() {
-    char exe[MAX_PATH] = {0};
-    GetModuleFileNameA(NULL, exe, MAX_PATH);
-    char* slash = strrchr(exe, '\\'); if (slash) *slash = 0;
-    char path[MAX_PATH];
-    _snprintf_s(path, _TRUNCATE, "%s\\sdk.ini", exe);
-    FILE* f = nullptr;
-    if (fopen_s(&f, path, "rb") != 0 || !f) {
-        sdk_log("[hooks] no sdk.ini at '%s' — keeping defaults (no force)", path);
-        return;
-    }
-    char line[256];
-    while (fgets(line, sizeof(line), f)) {
-        char* eq = strchr(line, '=');
-        if (!eq) continue;
-        *eq = 0;
-        const char* k = line;
-        const char* v = eq + 1;
-        // trim
-        while (*k == ' ' || *k == '\t') k++;
-        while (*v == ' ' || *v == '\t') v++;
-        char* eol = (char*)v + strlen(v);
-        while (eol > v && (eol[-1] == '\n' || eol[-1] == '\r' || eol[-1] == ' ')) {
-            *(--eol) = 0;
-        }
-        if      (_stricmp(k, "force_borderless")  == 0) g_force.enable_borderless = (atoi(v) != 0);
-        else if (_stricmp(k, "swallow_displaymode") == 0) g_force.swallow_displaymode = (atoi(v) != 0);
-        else if (_stricmp(k, "force_width")        == 0) g_force.width = atoi(v);
-        else if (_stricmp(k, "force_height")       == 0) g_force.height = atoi(v);
-        else if (_stricmp(k, "force_fullscreen")   == 0) g_force.fullscreen = (atoi(v) != 0);
-        else if (_stricmp(k, "enable_hd")          == 0) g_force.hd = (atoi(v) != 0);
-        else if (_stricmp(k, "enable_stretch")     == 0) g_force.stretch = (atoi(v) != 0);
-        else if (_stricmp(k, "enable_smooth")      == 0) g_force.smooth = (atoi(v) != 0);
-    }
-    fclose(f);
+    config::init();
+    g_force.enable_borderless   = config::get_bool("hooks", "force_borderless",    g_force.enable_borderless);
+    g_force.swallow_displaymode = config::get_bool("hooks", "swallow_displaymode", g_force.swallow_displaymode);
+    g_force.width               = config::get_int ("hooks", "force_width",         g_force.width);
+    g_force.height              = config::get_int ("hooks", "force_height",        g_force.height);
+    g_force.fullscreen          = config::get_bool("hooks", "force_fullscreen",    g_force.fullscreen);
+    g_force.hd                  = config::get_bool("hooks", "enable_hd",           g_force.hd);
+    g_force.stretch             = config::get_bool("hooks", "enable_stretch",      g_force.stretch);
+    g_force.smooth              = config::get_bool("hooks", "enable_smooth",       g_force.smooth);
+
     sdk::framecap::g_enabled = g_force.smooth;
     sdk_log("[hooks] sdk.ini: borderless=%d swallow_dm=%d wh=%dx%d stretch=%d smooth=%d",
             g_force.enable_borderless, g_force.swallow_displaymode,

@@ -14,4 +14,11 @@ namespace sdk { namespace iat {
 
 void* patch(HMODULE target, const char* dll_name, const char* fn_name, void* replacement);
 
+// Locate an import's IAT slot without touching it. Returns the ADDRESS OF the
+// slot (what a `call dword ptr [slot]` instruction needs as its operand), or
+// nullptr if the module does not import that function by name. Used by the
+// patch engine so a generated stub can call e.g. kernel32!IsBadReadPtr through
+// the engine's own IAT instead of baking in a build-specific thunk address.
+void** find_slot(HMODULE target, const char* dll_name, const char* fn_name);
+
 }} // namespace sdk::iat

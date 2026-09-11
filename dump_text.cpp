@@ -13,6 +13,9 @@
 // below 7.0 (with a hard cap of 30 polling rounds = 6 s).
 
 #include "sdk.h"
+#include "engine/build_profile.h"
+#include "patchset/patchset.h"
+#include "core/config.h"
 #include <cmath>
 #include <cstdio>
 
@@ -140,7 +143,16 @@ static DWORD WINAPI worker(LPVOID) {
     if (decrypted) {
         sdk_log("[dump] decryption detected (entropy + %u hook sites plaintext, round %d) — installing patches",
                 (unsigned)(sizeof(kSites) / sizeof(kSites[0])), round);
+        // Stage 2 of build identification: now that .text is plaintext, verify the
+        // profile's byte pins. Everything that writes .text should gate on
+        // engine::build::can_patch_text(); today this is report-only so the
+        // existing patches keep their own per-site signature checks unchanged.
+        engine::build::confirm_decrypted();
         patches::install();
+        // Data-driven engine patches. Runs AFTER the legacy ones so their
+        // full-length `expect` check catches any overlap instead of both
+        // writing the same bytes blind.
+        patchset::install();
         text_logger::install();
         // sacred_log_mirror::install();  // still disabled (needs SuspendThread)
         // Engine trigger/dialog hooks: (re)install here too, AFTER decryption.
@@ -148,6 +160,24 @@ static DWORD WINAPI worker(LPVOID) {
         // against decryption and abort on encrypted bytes; this post-decrypt
         // call guarantees they install. Idempotent if the bake already did it.
         runtime_triggers::ensure_hooks_installed();
+
+        // Optional second .text dump, taken after every patch has been
+        // applied. Diffing it against text_dump.bin proves exactly which
+        // bytes we changed — and, with everything disabled, that we changed
+        // none at all.
+        if (config::get_bool("patches", "dump_post", false)) {
+            char post[MAX_PATH];
+            resolve_dump_path(post, sizeof(post));
+            char* dot = strrchr(post, '.');
+            if (dot) _snprintf_s(dot, sizeof(post) - (dot - post), _TRUNCATE, "_post.bin");
+            FILE* pf = nullptr;
+            fopen_s(&pf, post, "wb");
+            if (pf) {
+                size_t w = fwrite(reinterpret_cast<unsigned char*>(TEXT_VA), 1, TEXT_SIZE, pf);
+                fclose(pf);
+                sdk_log("[dump] wrote %zu bytes to %s [post-patch]", w, post);
+            }
+        }
     } else {
         sdk_log("[dump] entropy never dropped — SKIPPING patches::install()/text_logger::install() to avoid corruption");
     }

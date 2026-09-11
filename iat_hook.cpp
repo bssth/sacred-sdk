@@ -51,4 +51,32 @@ void* patch(HMODULE target, const char* dll_name, const char* fn_name, void* rep
     return nullptr;
 }
 
+
+void** find_slot(HMODULE target, const char* dll_name, const char* fn_name) {
+    auto base = reinterpret_cast<BYTE*>(target);
+    auto dos  = reinterpret_cast<IMAGE_DOS_HEADER*>(base);
+    if (!base || dos->e_magic != IMAGE_DOS_SIGNATURE) return nullptr;
+    auto nt   = reinterpret_cast<IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE) return nullptr;
+
+    auto& imp_dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    if (!imp_dir.Size) return nullptr;
+    auto desc = reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(base + imp_dir.VirtualAddress);
+
+    for (; desc->Name; desc++) {
+        const char* this_dll = reinterpret_cast<const char*>(base + desc->Name);
+        if (_stricmp(this_dll, dll_name) != 0) continue;
+        auto int_thunks = reinterpret_cast<IMAGE_THUNK_DATA*>(
+            base + (desc->OriginalFirstThunk ? desc->OriginalFirstThunk : desc->FirstThunk));
+        auto iat_thunks = reinterpret_cast<IMAGE_THUNK_DATA*>(base + desc->FirstThunk);
+        for (int i = 0; int_thunks[i].u1.AddressOfData; i++) {
+            if (IMAGE_SNAP_BY_ORDINAL(int_thunks[i].u1.Ordinal)) continue;
+            auto* by_name = reinterpret_cast<IMAGE_IMPORT_BY_NAME*>(base + int_thunks[i].u1.AddressOfData);
+            if (strcmp(reinterpret_cast<const char*>(by_name->Name), fn_name) != 0) continue;
+            return reinterpret_cast<void**>(&iat_thunks[i].u1.Function);
+        }
+    }
+    return nullptr;
+}
+
 }} // namespace sdk::iat

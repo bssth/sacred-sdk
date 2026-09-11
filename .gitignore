@@ -12,6 +12,19 @@ re/ghidra/decompiled/
 
 SacredStudio/obj
 
+# ReBorn-derived analysis artifacts. The ADDRESS MAP (reborn_symbols.json) and the
+# hand-curated symbol list stay: they are interoperability facts about where things
+# live, and contain no third-party code. Everything below is disassembled or copied
+# bytes from someone else's binary and is regenerated locally by
+# re/py/x86/reborn_patch_sites.py from the user's own SacredReborn.exe.
+re/reborn_patch_sites.txt
+re/reborn_patch_sites.json
+re/hd_table.gen.json
+re/hd_golden.inc
+re/patch_review_queue.md
+patchset/records_generated.inc
+hd/hd_table.inc
+
 # Build artifacts
 Release/
 Debug/

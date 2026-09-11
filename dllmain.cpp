@@ -11,6 +11,8 @@
 //   3. write a startup record to sdk\logs\sdk_loaded.log AND the in-memory ring
 
 #include "sdk.h"
+#include "engine/build_profile.h"
+#include "core/config.h"
 #include <stdlib.h>   // atoi (sdk.ini flag parse)
 
 // --- Exported forwarders ----------------------------------------------------
@@ -44,32 +46,6 @@ static void resolve_log_path() {
     _snprintf_s(dir, _TRUNCATE, "%s\\sdk\\logs", exe_path);
     CreateDirectoryA(dir, NULL);
     _snprintf_s(g_log_path, _TRUNCATE, "%s\\sdk_loaded.log", dir);
-}
-
-// Read a boolean flag from exe_dir\sdk.ini (flat key=value; sections ignored).
-// Returns true only if `key` is present with a non-zero value. Used to keep
-// dev-only self-tests OFF by default for shipped builds (not everyone has PAX
-// saves, and per-launch probes are noise). Opt in with e.g. `selftest=1`.
-static bool sdk_ini_flag(const char* key) {
-    char exe[MAX_PATH] = {0};
-    GetModuleFileNameA(NULL, exe, MAX_PATH);
-    char* slash = strrchr(exe, '\\'); if (slash) *slash = 0;
-    char path[MAX_PATH];
-    _snprintf_s(path, _TRUNCATE, "%s\\sdk.ini", exe);
-    FILE* f = nullptr;
-    if (fopen_s(&f, path, "rb") != 0 || !f) return false;
-    bool on = false;
-    char line[256];
-    while (fgets(line, sizeof(line), f)) {
-        char* eq = strchr(line, '='); if (!eq) continue;
-        *eq = 0;
-        const char* k = line; const char* v = eq + 1;
-        while (*k == ' ' || *k == '\t') ++k;
-        while (*v == ' ' || *v == '\t') ++v;
-        if (_stricmp(k, key) == 0) { on = (atoi(v) != 0); break; }
-    }
-    fclose(f);
-    return on;
 }
 
 void sdk_log(const char* fmt, ...) {
@@ -123,6 +99,11 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             g_log.init();
 
             capture_attach(hModule);
+            // Identify which Sacred.exe we are in BEFORE anything else runs.
+            // PE headers are not encrypted, so this is safe under loader lock,
+            // and every later decision about touching .text depends on it.
+            engine::build::detect();
+            config::init();   // one parser for sdk.ini + Settings.cfg
 
             sdk_log("=== ijl15 proxy DllMain DLL_PROCESS_ATTACH ===");
             sdk_log("  exe       = %s", g_attach.exe_path);
@@ -146,7 +127,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             // per-launch probes are log noise). Opt in via sdk.ini `selftest=1`.
             // All functionality stays available on demand — the engine VAs and
             // game-zlib resolve LAZILY on first sacred.read_save/globalres/etc.
-            if (sdk_ini_flag("selftest")) {
+            if (config::get_bool("sdk", "selftest", false)) {
                 sdk_log("[startup] selftest=1 — running hero-save + engine-resolve self-tests");
                 start_hero_save_probe();      // worker: self-test the wired PAX hero-save port
                 engine_resolve::start_engine_resolve();  // worker: verify engine VAs + globalres probe

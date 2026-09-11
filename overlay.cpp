@@ -24,6 +24,7 @@
 //   "borderless" mode that hooks.cpp already enforces.
 
 #include "sdk.h"
+#include "patchset/patchset.h"
 #include <d3d11.h>
 #include <dxgi.h>
 #include <d3dcompiler.h>
@@ -594,6 +595,8 @@ static void draw_ui() {
                           "mirroring the install tree (e.g. "
                           "`custom\\scripts\\us\\global.res`)");
     }
+
+    sdk::patchset::draw_panel();
 
     if (ImGui::CollapsingHeader("2.29-rosetta patches", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::TextColored(sdk::patches::g_patch1_active
