@@ -2355,6 +2355,8 @@ void install_lua_api(lua_State* L) {
     lua_pushcfunction(L, l_sacred_hero_items);              lua_setfield(L, -2, "hero_items");
     lua_pushcfunction(L, l_sacred_hero_item_count);         lua_setfield(L, -2, "hero_item_count");
     lua_pushcfunction(L, l_sacred_hero_has_item);           lua_setfield(L, -2, "hero_has_item");
+    lua_pushcfunction(L, l_sacred_hero_put_item);           lua_setfield(L, -2, "hero_put_item");
+    lua_pushcfunction(L, l_sacred_hero_take_item);          lua_setfield(L, -2, "hero_take_item");
     lua_pushcfunction(L, l_sacred_dialog_redirect);         lua_setfield(L, -2, "dialog_redirect");
     lua_pushcfunction(L, l_sacred_dialog_learn);            lua_setfield(L, -2, "dialog_learn");
     lua_pushcfunction(L, l_sacred_dialog_override);         lua_setfield(L, -2, "dialog_override");
