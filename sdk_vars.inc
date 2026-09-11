@@ -447,3 +447,159 @@ static void vars_tick() {
         fire("SDK:SAVE_LOADED");
     }
 }
+
+// ---- running a section now ---------------------------------------------------
+// sacred.section_run(name) queues a section for the next heartbeat, which runs it
+// through the engine: FUN_0046bf40 (cdecl: name, creature, flag) finds it by name
+// the way the engine's own callers do and calls WorkFunktion FUN_0046ba90 (cdecl:
+// section, creature, flag). The records execute with the engine's own handlers and
+// no creature, like a dialog button's, so any vanilla record shape works at run
+// time (objectives.lua: SetOnKill, InfoPlayer). A section defined in this tick's
+// Lua is in the table by then, because sections_tick injects first. Two guards:
+// the WorkFunktion redirect must be live (an SDK section run without it would read
+// the FunkCode file at a virtual offset), and a world must be loaded. The run-once
+// latch (+0x50) is set only when a record makes the walker return 2, and SDK-built
+// sections carry no such record.
+typedef unsigned (__cdecl* run_section_t)(const char* name, void* creature, int flag);
+static const run_section_t kRunSectionByName = (run_section_t)0x0046BF40;
+constexpr int SEC_RUN_MAX = 16;
+static char   g_run_q[SEC_RUN_MAX][64];
+static int    g_run_n = 0;
+
+static unsigned run_section_now(const char* name, bool* fault) {
+    unsigned rc = 0;
+    *fault = false;
+    __try { rc = kRunSectionByName(name, nullptr, 0); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { *fault = true; }
+    return rc;
+}
+
+// Called from heartbeat(), after sections_tick(), on the game thread.
+static void sections_run_queued() {
+    if (!g_run_n) return;
+    char q[SEC_RUN_MAX][64];
+    int n = g_run_n;
+    memcpy(q, g_run_q, sizeof q);
+    g_run_n = 0;
+    bool ok = g_sec_patched && world_sections() >= 100;
+    for (int i = 0; i < n; i++) {
+        if (!ok) {
+            sdk_log("[sections] run '%s' dropped: %s", q[i],
+                    g_sec_patched ? "no world loaded" : "SDK sections are off");
+            continue;
+        }
+        bool fault = false;
+        unsigned rc = run_section_now(q[i], &fault);
+        sdk_log("[sections] run '%s' -> %s0x%08x", q[i], fault ? "FAULT " : "", rc);
+    }
+}
+
+// sacred.section_run(name) -> true | false: run a section (an SDK section, or a
+// vanilla one by name) through the engine on the next heartbeat.
+static int l_sacred_section_run(lua_State* L) {
+    size_t n = 0;
+    const char* name = luaL_checklstring(L, 1, &n);
+    if (n < 1 || n > 63 || g_run_n >= SEC_RUN_MAX) { lua_pushboolean(L, 0); return 1; }
+    memcpy(g_run_q[g_run_n], name, n + 1);
+    g_run_n++;
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+// ---- objective counters --------------------------------------------------------
+// SetOnKill (0x87) and SetOnCollect (0x88) keep {type, remaining, total, char
+// section[0x40]} entries, stride 0x4c, in vectors at qm+0x7614 (kills) and
+// qm+0x7620 (pickups) (RE_conditions_vars.md §4). The engine counts them down in
+// FUN_004aa630 / FUN_004aaae0, shows its own "x of y" message, runs the section at
+// zero and drops the entry; the savegame keeps them. SDK code writes them by
+// running a SetOnKill record (objectives.lua); these only read.
+constexpr uintptr_t KILL_VEC_VA    = 0x00AB4594;   // qm+0x7614
+constexpr uintptr_t COLLECT_VEC_VA = 0x00AB45A0;   // qm+0x7620
+struct CounterRow { int32_t type, left, total; char section[0x40]; };
+
+static int counters_snapshot(uintptr_t vec, CounterRow* out, int max) {
+    int k = 0;
+    __try {
+        uintptr_t b = *(volatile uintptr_t*)vec, e = *(volatile uintptr_t*)(vec + 4);
+        if (!b || e < b || (e - b) % sizeof(CounterRow)) return 0;
+        unsigned n = (unsigned)((e - b) / sizeof(CounterRow));
+        for (unsigned i = 0; i < n && k < max; i++, k++) {
+            memcpy(&out[k], (const void*)(b + i * sizeof(CounterRow)), sizeof(CounterRow));
+            out[k].section[0x3f] = 0;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    return k;
+}
+
+static int push_counters(lua_State* L, uintptr_t vec) {
+    CounterRow rows[64];
+    int n = counters_snapshot(vec, rows, 64);
+    lua_createtable(L, n, 0);
+    for (int i = 0; i < n; i++) {
+        lua_createtable(L, 0, 4);
+        lua_pushinteger(L, rows[i].type);   lua_setfield(L, -2, "type");
+        lua_pushinteger(L, rows[i].left);   lua_setfield(L, -2, "left");
+        lua_pushinteger(L, rows[i].total);  lua_setfield(L, -2, "total");
+        lua_pushstring(L, rows[i].section); lua_setfield(L, -2, "section");
+        lua_rawseti(L, -2, i + 1);
+    }
+    return 1;
+}
+
+// sacred.kill_counters() / sacred.collect_counters()
+//   -> { {type=, left=, total=, section=}, ... }
+static int l_sacred_kill_counters(lua_State* L)    { return push_counters(L, KILL_VEC_VA); }
+static int l_sacred_collect_counters(lua_State* L) { return push_counters(L, COLLECT_VEC_VA); }
+
+// ---- kill-counter probe (gap 4) --------------------------------------------------
+// FUN_004aa630 (thiscall on qm, one arg: the killed creature's type) is the
+// consumer of the SetOnKill counters. Four direct E8 calls reach it:
+//   0x0052f453  FUN_0052e590, action 9 ACTION_SUDDEN_DEATH, only with a known killer
+//   0x00534795  a death from damage; not for a type of class 5 while max HP != 0
+//   0x005475f0  FUN_00547070's outright kill (it zeroes the HP itself); not for
+//               group members (+0x1F4 & 0x80000), +0x2B8 & 0x40, or hooked creatures
+//   0x007e02c6  the network dispatcher
+// Each goes through a thunk that logs the call (capped), so a live run shows
+// which deaths reach the counter and by which path.
+static uintptr_t     g_kc_target = 0x004AA630;
+static volatile LONG g_kc_logged = 0;
+static bool          g_kc_patched = false;
+
+extern "C" void __cdecl sdk_kill_counter_call(uintptr_t ra, int type) {
+    if (InterlockedIncrement(&g_kc_logged) > 300) return;
+    const char* via = ra == 0x0052F458 ? "sudden death (with killer)"
+                    : ra == 0x0053479A ? "damage death"
+                    : ra == 0x005475F5 ? "outright kill"
+                    : ra == 0x007E02CB ? "network" : "?";
+    sdk_log("[kill] counter call: type %d via %s", type, via);
+}
+
+__declspec(naked) static void kc_thunk() {
+    __asm {
+        pushfd
+        pushad
+        mov  eax, [esp + 36]          // return address into the calling site
+        mov  edx, [esp + 40]          // the killed creature's type
+        push edx
+        push eax
+        call sdk_kill_counter_call
+        add  esp, 8
+        popad
+        popfd
+        jmp  dword ptr [g_kc_target]
+    }
+}
+
+// Called from heartbeat(); patches each call site that still holds the expected call.
+static void kill_probe_tick() {
+    if (g_kc_patched) return;
+    HMODULE exe = g_attach.exe_module;
+    if (!exe || (uintptr_t)exe != 0x00400000) return;
+    g_kc_patched = true;
+    static const uintptr_t sites[] = { 0x0052F453, 0x00534795, 0x005475F0, 0x007E02C6 };
+    int n = 0;
+    for (uintptr_t s : sites) {
+        if (sec_call_is(s, 0x004AA630)) { sec_call_write(s, (void*)&kc_thunk); n++; }
+    }
+    sdk_log("[kill] kill-counter probe on %d of 4 call sites", n);
+}

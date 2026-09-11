@@ -2349,6 +2349,9 @@ void install_lua_api(lua_State* L) {
     lua_pushcfunction(L, l_sacred_world_serial);            lua_setfield(L, -2, "world_serial");
     lua_pushcfunction(L, l_sacred_world_alive);             lua_setfield(L, -2, "world_alive");
     lua_pushcfunction(L, l_sacred_set_new_game_spawn);      lua_setfield(L, -2, "set_new_game_spawn");
+    lua_pushcfunction(L, l_sacred_section_run);             lua_setfield(L, -2, "section_run");
+    lua_pushcfunction(L, l_sacred_kill_counters);           lua_setfield(L, -2, "kill_counters");
+    lua_pushcfunction(L, l_sacred_collect_counters);        lua_setfield(L, -2, "collect_counters");
     lua_pushcfunction(L, l_sacred_dialog_redirect);         lua_setfield(L, -2, "dialog_redirect");
     lua_pushcfunction(L, l_sacred_dialog_learn);            lua_setfield(L, -2, "dialog_learn");
     lua_pushcfunction(L, l_sacred_dialog_override);         lua_setfield(L, -2, "dialog_override");
@@ -2464,6 +2467,8 @@ void heartbeat() {
     if (!g_ready || !g_L) return;
     vars_tick();              // savegame hooks: patch once, SDK:SAVE_LOADED after a load
     sections_tick();          // SDK sections: patch once, keep injected, run button callbacks
+    sections_run_queued();    // sacred.section_run, after the inject above
+    kill_probe_tick();        // gap 4 probe: log every kill-counter call
     fire_tick();
 }
 
