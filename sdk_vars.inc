@@ -477,6 +477,9 @@ static unsigned run_section_now(const char* name, bool* fault) {
 // Called from heartbeat(), after sections_tick(), on the game thread.
 static void sections_run_queued() {
     if (!g_run_n) return;
+    // A section defined by this tick's SECTION: callbacks (fired inside
+    // sections_tick, after its inject) must enter the table before it runs.
+    if (g_sec_patched) sections_inject();
     char q[SEC_RUN_MAX][64];
     int n = g_run_n;
     memcpy(q, g_run_q, sizeof q);
