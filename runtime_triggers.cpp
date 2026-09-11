@@ -1539,6 +1539,9 @@ static int l_sacred_npc_talkable(lua_State* L) {
     return 1;
 }
 
+// SDK-owned script sections: own Dialog: nodes and button handlers.
+#include "sdk_sections.inc"
+
 // sacred.npc_roster_add(handle, quest_id) -> bool  (companion panel)
 static int l_sacred_npc_roster_add(lua_State* L) {
     lua_pushboolean(L, sdk::player::npc_roster_add(
@@ -2345,6 +2348,7 @@ void install_lua_api(lua_State* L) {
     lua_pushcfunction(L, l_sacred_trigger_table_dump);      lua_setfield(L, -2, "trigger_table_dump");
     lua_pushcfunction(L, l_sacred_npc_in_dialog);           lua_setfield(L, -2, "npc_in_dialog");
     lua_pushcfunction(L, l_sacred_npc_talkable);            lua_setfield(L, -2, "npc_talkable");
+    lua_pushcfunction(L, l_sacred_section_define);          lua_setfield(L, -2, "section_define");
     lua_pushcfunction(L, l_sacred_dialog_redirect);         lua_setfield(L, -2, "dialog_redirect");
     lua_pushcfunction(L, l_sacred_dialog_learn);            lua_setfield(L, -2, "dialog_learn");
     lua_pushcfunction(L, l_sacred_dialog_override);         lua_setfield(L, -2, "dialog_override");
@@ -2458,6 +2462,7 @@ static void fire_tick() {
 // runs on the game thread inside the message pump — an idle-safe point.
 void heartbeat() {
     if (!g_ready || !g_L) return;
+    sections_tick();          // SDK sections: patch once, keep injected, run button callbacks
     fire_tick();
 }
 
