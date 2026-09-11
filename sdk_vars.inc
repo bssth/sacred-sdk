@@ -606,3 +606,67 @@ static void kill_probe_tick() {
     }
     sdk_log("[kill] kill-counter probe on %d of 4 call sites", n);
 }
+
+// ---- hero quest bits (SDK_GAPS gap 12) ------------------------------------------
+// SetVarBit / UnsetVarBit with the variable name "HeroQBit", and the predicates
+// IsQBitSet: / IsQBitNotSet: (ops 0x9b/0x9c), leave the variable table alone: they
+// reach the hero's own bits in cStatsManager, 160 per difficulty, which travel
+// with the hero's save. cStatsManager_Instance_00425290 (cdecl; its argument, the
+// hero handle, is unused) returns the singleton at 0x00AA5598. FUN_00424d50
+// (thiscall: difficulty, bit; ret 8) reads [+0x5724 + (diff*5 + bit/32)*4];
+// FUN_00424da0 (thiscall: difficulty, bit, on; ret 0xc) sets or clears it. Both
+// refuse bits from 160 and difficulties from 5. The difficulty is [0x0182EE44].
+// The engine calls them the same way: FUN_0049b840 sets at 0x49ba8a and clears at
+// 0x49c3bf, FUN_004987b0 reads at 0x498bee. Vanilla uses bits 0-4, 6-9, 11 and
+// 101-106.
+//
+//   sacred.hero_qbit(bit)                -> bool | nil
+//   sacred.hero_qbit_set(bit[, on=true]) -> the bit afterwards | nil
+//   sacred.difficulty()                  -> 0..4 (Bronze .. Niobium) | nil
+typedef uintptr_t (__cdecl* stats_instance_t)(uint32_t unused);
+typedef int  (__thiscall* qbit_get_t)(void* stats, uint32_t diff, uint32_t bit);
+typedef void (__thiscall* qbit_put_t)(void* stats, uint32_t diff, uint32_t bit, char on);
+constexpr int       HERO_QBITS      = 160;
+constexpr uintptr_t DIFFICULTY_ADDR = 0x0182EE44;
+
+// The current difficulty 0..4, or -1.
+static int difficulty_now() {
+    if ((uintptr_t)g_attach.exe_module != 0x00400000) return -1;
+    uint32_t d = *(volatile uint32_t*)DIFFICULTY_ADDR;
+    return d < 5 ? (int)d : -1;
+}
+
+// set: -1 read, 0 clear, 1 set. Returns the bit afterwards (0/1), or -1.
+static int hero_qbit_now(int bit, int set) {
+    int diff = difficulty_now();
+    if (diff < 0 || bit < 0 || bit >= HERO_QBITS) return -1;
+    int r = -1;
+    __try {
+        void* stats = (void*)((stats_instance_t)0x00425290)(0);
+        if (!stats) return -1;
+        if (set >= 0) ((qbit_put_t)0x00424DA0)(stats, (uint32_t)diff, (uint32_t)bit, set ? 1 : 0);
+        r = ((qbit_get_t)0x00424D50)(stats, (uint32_t)diff, (uint32_t)bit) ? 1 : 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { r = -1; }
+    return r;
+}
+
+static int l_sacred_hero_qbit(lua_State* L) {
+    int r = hero_qbit_now((int)luaL_checkinteger(L, 1), -1);
+    if (r < 0) lua_pushnil(L); else lua_pushboolean(L, r);
+    return 1;
+}
+
+static int l_sacred_hero_qbit_set(lua_State* L) {
+    int bit = (int)luaL_checkinteger(L, 1);
+    int on = lua_isnoneornil(L, 2) ? 1 : (lua_toboolean(L, 2) ? 1 : 0);
+    int r = hero_qbit_now(bit, on);
+    sdk_log("[qbit] hero bit %d on difficulty %d %s -> %d", bit, difficulty_now(), on ? "set" : "cleared", r);
+    if (r < 0) lua_pushnil(L); else lua_pushboolean(L, r);
+    return 1;
+}
+
+static int l_sacred_difficulty(lua_State* L) {
+    int d = difficulty_now();
+    if (d < 0) lua_pushnil(L); else lua_pushinteger(L, d);
+    return 1;
+}

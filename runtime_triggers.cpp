@@ -129,11 +129,8 @@ const char* status() { return g_status; }
 //   hero + 0x3EE    u32     gold
 //   hero + 0x1A4..0x1EC  (step 4)  19 equip slots of item handles (sdk_items.inc)
 //
-// Qbit-set lives at interpreter_ctx + 0xA860 as a packed bitfield. That
-// requires a different chain (the script-VM singleton) which we haven't
-// nailed down — deferred. Mods can still toggle qbits at BAKE time via
-// q.set_hero_qbit() in QuestCode.lua, which is the only place qbits
-// normally change anyway.
+// Hero quest bits (ctx:set_qbit / get_qbit, sacred.hero_qbit) live in
+// cStatsManager, 160 per difficulty: sdk_vars.inc.
 
 constexpr uintptr_t HERO_OFF_GOLD            = 0x3EE;
 constexpr uintptr_t HERO_OFF_EQUIP_BASE      = 0x1A4;
@@ -278,30 +275,16 @@ static int sacred_hero_has_item(int item_type) {
     return (n > 0 || listed) ? 1 : 0;
 }
 
-// Qbit-set/get: deferred. Recon located the bitarray at
-// interpreter_ctx + 0xA860 but resolving the interpreter ctx pointer
-// reliably needs more work. Modders use the bake-time path for now.
-static bool sacred_set_hero_qbit(int bit, bool /*value*/) {
-    static bool warned = false;
-    if (!warned) {
-        warned = true;
-        sdk_log("[runtime_triggers] WARNING: ctx:set_qbit(%d,..) is NOT "
-                "implemented at runtime (the interp-ctx+0xA860 bitarray "
-                "resolve is still TODO). It is a silent no-op — use the "
-                "BAKE-time q.set_hero_qbit() instead. This warns once.", bit);
-    }
-    return false;
+// ctx:set_qbit(bit[, on]) / ctx:get_qbit(bit): the hero's own quest bits, the
+// "HeroQBit" of vanilla's SetVarBit and IsQBitSet: (sdk_vars.inc). Until
+// 2026-09-11 these were no-ops waiting for an "interp-ctx+0xA860 bitarray";
+// that slot is the operand reader's INT staging, not a bitfield (SDK_GAPS gap 12).
+static int hero_qbit_now(int bit, int set);   // sdk_vars.inc
+static bool sacred_set_hero_qbit(int bit, bool value) {
+    return hero_qbit_now(bit, value ? 1 : 0) == (value ? 1 : 0);
 }
 static int sacred_get_hero_qbit(int bit) {
-    static bool warned = false;
-    if (!warned) {
-        warned = true;
-        sdk_log("[runtime_triggers] WARNING: ctx:get_qbit(%d) is NOT "
-                "implemented at runtime (returns nil). The interp-ctx "
-                "+0xA860 bitarray resolve is still TODO. This warns once.",
-                bit);
-    }
-    return -1;
+    return hero_qbit_now(bit, -1);
 }
 
 // Notification: forward to the overlay's toast list (rendered in
@@ -2357,6 +2340,9 @@ void install_lua_api(lua_State* L) {
     lua_pushcfunction(L, l_sacred_hero_has_item);           lua_setfield(L, -2, "hero_has_item");
     lua_pushcfunction(L, l_sacred_hero_put_item);           lua_setfield(L, -2, "hero_put_item");
     lua_pushcfunction(L, l_sacred_hero_take_item);          lua_setfield(L, -2, "hero_take_item");
+    lua_pushcfunction(L, l_sacred_hero_qbit);               lua_setfield(L, -2, "hero_qbit");
+    lua_pushcfunction(L, l_sacred_hero_qbit_set);           lua_setfield(L, -2, "hero_qbit_set");
+    lua_pushcfunction(L, l_sacred_difficulty);              lua_setfield(L, -2, "difficulty");
     lua_pushcfunction(L, l_sacred_dialog_redirect);         lua_setfield(L, -2, "dialog_redirect");
     lua_pushcfunction(L, l_sacred_dialog_learn);            lua_setfield(L, -2, "dialog_learn");
     lua_pushcfunction(L, l_sacred_dialog_override);         lua_setfield(L, -2, "dialog_override");
