@@ -127,7 +127,7 @@ const char* status() { return g_status; }
 //
 // Offsets (verified by recon; medium confidence):
 //   hero + 0x3EE    u32     gold
-//   hero + 0x1A4..0x1E8  (step 4)  18 equip-slot item-ids (u32 each)
+//   hero + 0x1A4..0x1EC  (step 4)  19 equip slots of item handles (sdk_items.inc)
 //
 // Qbit-set lives at interpreter_ctx + 0xA860 as a packed bitfield. That
 // requires a different chain (the script-VM singleton) which we haven't
@@ -137,7 +137,6 @@ const char* status() { return g_status; }
 
 constexpr uintptr_t HERO_OFF_GOLD            = 0x3EE;
 constexpr uintptr_t HERO_OFF_EQUIP_BASE      = 0x1A4;
-constexpr int       HERO_EQUIP_SLOTS         = 18;
 // Verified via CT table + char.cpp source (community refs):
 constexpr uintptr_t HERO_OFF_SKILL_ID_BASE   = 0x3CC;  // 8 × u8
 constexpr uintptr_t HERO_OFF_SKILL_LVL_BASE  = 0x3D4;  // 8 × u8
@@ -267,17 +266,16 @@ static bool sacred_give_hero_gold(int32_t amount) {
     return true;
 }
 
-static int sacred_hero_has_item(int item_res) {
-    uintptr_t base = sdk::player::hero_base();
-    if (!base) return -1;
-    void* slots = (void*)(base + HERO_OFF_EQUIP_BASE);
-    if (IsBadReadPtr(slots, HERO_EQUIP_SLOTS * sizeof(uint32_t))) return -1;
-    const uint32_t* p = (const uint32_t*)slots;
-    uint32_t needle = (uint32_t)item_res;
-    for (int i = 0; i < HERO_EQUIP_SLOTS; i++) {
-        if (p[i] == needle) return 1;
-    }
-    return 0;  // not in equipment. Backpack scan is a future enhancement.
+// ctx:has_item(type): does the hero carry an item of this TYPE (backpack,
+// equipment, or the quest-item list)? The scan lives in sdk_items.inc. Until
+// 2026-09-11 this compared equipment item HANDLES with a res id, over 18 of the
+// 19 slots and no backpack, so it never matched (SDK_GAPS gap 6).
+static int hero_item_count_type(uint32_t type, bool* listed);   // sdk_items.inc
+static int sacred_hero_has_item(int item_type) {
+    bool listed = false;
+    int n = hero_item_count_type((uint32_t)item_type, &listed);
+    if (n < 0) return -1;
+    return (n > 0 || listed) ? 1 : 0;
 }
 
 // Qbit-set/get: deferred. Recon located the bitarray at
@@ -559,7 +557,7 @@ static int l_ctx_notify(lua_State* L) {
 // ctx:get_var / ctx:set_var (sdk_vars.inc).
 //
 //   sacred.state_dump()                       -> count (also logs to file)
-//   sacred.state_get(name)                    -> {x, y, r, z} or nil
+//   sacred.state_get(name)                    -> {x, y, r, z} or nil (exact name, else any case)
 //   sacred.state_set(name, v0[, v1, v2, v3])  -> bool (in-place only)
 // -------------------------------------------------------------------------
 
@@ -1539,6 +1537,7 @@ static int l_sacred_npc_talkable(lua_State* L) {
 // SDK-owned script sections: own Dialog: nodes and button handlers.
 #include "sdk_sections.inc"
 #include "sdk_vars.inc"      // script variables + savegame hooks (uses the sections helpers)
+#include "sdk_items.inc"     // the hero's items: backpack, equipment, quest-item list
 
 // sacred.npc_roster_add(handle, quest_id) -> bool  (companion panel)
 static int l_sacred_npc_roster_add(lua_State* L) {
@@ -2163,6 +2162,7 @@ constexpr uintptr_t STATE_OFF_NAME      = 0x04;
 constexpr uintptr_t STATE_OFF_VALUES    = 0x44;
 constexpr int       STATE_VALUE_COUNT   = 4;
 static int       state_walk(StateRow* out, int max);
+static uintptr_t state_mgr();
 static uintptr_t state_find(const char* name);
 static bool      state_write_in_place(const char* name,
                                       int n_values,
@@ -2170,7 +2170,7 @@ static bool      state_write_in_place(const char* name,
 // (g_quest_mgr forward-declared higher up so the questbook block can use it.)
 
 static int l_sacred_state_dump(lua_State* L) {
-    if (!g_quest_mgr) {
+    if (!state_mgr()) {
         sdk_log("[runtime_triggers] state_dump: cQuestManager not yet captured "
                 "(walker hook hasn't fired — load a save first)");
         lua_pushinteger(L, -1);
@@ -2352,6 +2352,9 @@ void install_lua_api(lua_State* L) {
     lua_pushcfunction(L, l_sacred_section_run);             lua_setfield(L, -2, "section_run");
     lua_pushcfunction(L, l_sacred_kill_counters);           lua_setfield(L, -2, "kill_counters");
     lua_pushcfunction(L, l_sacred_collect_counters);        lua_setfield(L, -2, "collect_counters");
+    lua_pushcfunction(L, l_sacred_hero_items);              lua_setfield(L, -2, "hero_items");
+    lua_pushcfunction(L, l_sacred_hero_item_count);         lua_setfield(L, -2, "hero_item_count");
+    lua_pushcfunction(L, l_sacred_hero_has_item);           lua_setfield(L, -2, "hero_has_item");
     lua_pushcfunction(L, l_sacred_dialog_redirect);         lua_setfield(L, -2, "dialog_redirect");
     lua_pushcfunction(L, l_sacred_dialog_learn);            lua_setfield(L, -2, "dialog_learn");
     lua_pushcfunction(L, l_sacred_dialog_override);         lua_setfield(L, -2, "dialog_override");
@@ -2818,9 +2821,17 @@ __declspec(naked) static void __cdecl hook_quest_walker() {
 // 64 bytes) into out[i].name; values into out[i].v[0..3]. (StateRow itself
 // is defined up near the Lua bindings since the bindings need its sizeof.)
 
+// The cQuestMgr the script-walker hook captured, else the fixed global
+// (engine/addresses.h QM) while the exe sits at its preferred base: the
+// position table is then readable before any walker ran.
+static uintptr_t state_mgr() {
+    if (g_quest_mgr) return g_quest_mgr;
+    return (uintptr_t)g_attach.exe_module == 0x00400000 ? 0x00AACF80 : 0;
+}
+
 static int state_walk(StateRow* out, int max) {
-    if (!g_quest_mgr || !out || max <= 0) return -1;
-    uintptr_t mgr = g_quest_mgr;
+    uintptr_t mgr = state_mgr();
+    if (!mgr || !out || max <= 0) return -1;
     uintptr_t begin = 0, end = 0;
     __try {
         begin = *(uintptr_t*)(mgr + MGR_OFF_STATE_BEGIN);
@@ -2859,8 +2870,10 @@ static int state_walk(StateRow* out, int max) {
 // Lookup one entry by name. Returns address of the entry or 0 if not found.
 // Caller can then read/write the value slots directly at +0x44..+0x50.
 static uintptr_t state_find(const char* name) {
-    if (!g_quest_mgr || !name || !*name) return 0;
-    uintptr_t mgr = g_quest_mgr;
+    uintptr_t mgr = state_mgr();
+    if (!mgr || !name || !*name) return 0;
+    size_t len = strlen(name);
+    if (len >= 60) return 0;
     uintptr_t begin = 0, end = 0;
     __try {
         begin = *(uintptr_t*)(mgr + MGR_OFF_STATE_BEGIN);
@@ -2868,19 +2881,20 @@ static uintptr_t state_find(const char* name) {
     } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
     if (!begin || end < begin) return 0;
     int total = (int)((end - begin) / STATE_ENTRY_STRIDE);
+    uintptr_t folded = 0;                   // the first match in another case
     for (int i = 0; i < total; i++) {
         uintptr_t e = begin + (uintptr_t)i * STATE_ENTRY_STRIDE;
         __try {
             if (*(uint32_t*)(e + STATE_OFF_STATUS) != 0) continue;
             const char* slot_name = (const char*)(e + STATE_OFF_NAME);
-            if (strncmp(slot_name, name, 60) == 0 && slot_name[strlen(name)] == 0) {
-                return e;
-            }
+            if (slot_name[len] != 0) continue;
+            if (strncmp(slot_name, name, len) == 0) return e;
+            if (!folded && _strnicmp(slot_name, name, len) == 0) folded = e;
         } __except (EXCEPTION_EXECUTE_HANDLER) {
             continue;
         }
     }
-    return 0;
+    return folded;
 }
 
 // Write up to 4 values into an EXISTING entry. Append (creating new entries)
