@@ -2346,6 +2346,9 @@ void install_lua_api(lua_State* L) {
     lua_pushcfunction(L, l_sacred_vars);                    lua_setfield(L, -2, "vars");
     lua_pushcfunction(L, l_sacred_var_dump);                lua_setfield(L, -2, "var_dump");
     lua_pushcfunction(L, l_sacred_disarm_spawn_teleport);   lua_setfield(L, -2, "disarm_spawn_teleport");
+    lua_pushcfunction(L, l_sacred_world_serial);            lua_setfield(L, -2, "world_serial");
+    lua_pushcfunction(L, l_sacred_world_alive);             lua_setfield(L, -2, "world_alive");
+    lua_pushcfunction(L, l_sacred_set_new_game_spawn);      lua_setfield(L, -2, "set_new_game_spawn");
     lua_pushcfunction(L, l_sacred_dialog_redirect);         lua_setfield(L, -2, "dialog_redirect");
     lua_pushcfunction(L, l_sacred_dialog_learn);            lua_setfield(L, -2, "dialog_learn");
     lua_pushcfunction(L, l_sacred_dialog_override);         lua_setfield(L, -2, "dialog_override");

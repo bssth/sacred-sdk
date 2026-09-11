@@ -293,24 +293,146 @@ __declspec(naked) static void qs_save_thunk() {
     }
 }
 
+// ---- world builds ------------------------------------------------------------
+// FUN_0046f9b0 (thiscall on qm, two stack args, ret 8) loads a world's scripts:
+// Vectoren.bin, the FunkCode.bin the section table points into, the quest
+// registry. It runs once for every world the engine builds, from two direct E8
+// calls:
+//   0x0060c2dc  in FUN_0060b29f                 a new game
+//   0x004676b7  in FUN_00465690 (the serializer)  a savegame load
+// Both calls go through counting thunks, and sacred.world_serial() returns the
+// count, so Lua knows the moment a new world is being built. on_world_load
+// cannot tell: it keys on the journal vector moving, which happened in a running
+// world and not at all on a second new game (log of 2026-09-11). A new-game
+// build also arms the start-placement hijack when sacred.set_new_game_spawn(kx,
+// ky) is set; a savegame load never does.
+
+static volatile LONG g_world_builds = 0, g_newgame_builds = 0;   // bumped by the thunks
+static LONG          g_world_builds_seen = 0, g_newgame_builds_seen = 0;
+static uintptr_t     g_ld_target = 0x0046F9B0;                   // FUN_0046f9b0
+static bool          g_ld_patched = false, g_ld_warned = false;
+static bool          g_ng_spawn_on = false;
+static int           g_ng_spawn_kx = 0, g_ng_spawn_ky = 0;
+
+// Runs inside the engine's new-game world build, before the start placement.
+extern "C" void __cdecl sdk_newgame_build() {
+    if (!g_ng_spawn_on) return;
+    g_tp_ov.kx       = g_ng_spawn_kx;
+    g_tp_ov.ky       = g_ng_spawn_ky;
+    g_tp_ov.lvl_set  = false;              // keep the engine's own level
+    g_tp_ov.until_ms = 0;                  // one-shot
+    g_tp_ov.armed    = true;
+    g_tp_log         = 0;
+    g_tp_arm_loads   = g_qs_loads;
+    sdk_log("[tp] new game: start-placement hijack armed -> (%d,%d)", g_ng_spawn_kx, g_ng_spawn_ky);
+}
+
+__declspec(naked) static void ld_newgame_thunk() {
+    __asm {
+        lock inc dword ptr [g_world_builds]
+        lock inc dword ptr [g_newgame_builds]
+        pushfd
+        pushad
+        call sdk_newgame_build
+        popad
+        popfd
+        jmp  dword ptr [g_ld_target]
+    }
+}
+
+__declspec(naked) static void ld_load_thunk() {
+    __asm {
+        lock inc dword ptr [g_world_builds]
+        jmp  dword ptr [g_ld_target]
+    }
+}
+
+// sacred.world_serial() -> integer: worlds the engine has built in this process
+// (new games and savegame loads). A change means the world your handles and
+// flags belong to is gone.
+static int l_sacred_world_serial(lua_State* L) {
+    lua_pushinteger(L, (lua_Integer)g_world_builds);
+    return 1;
+}
+
+// Sections the engine itself has loaded, the SDK's appended ones excluded. The
+// table is emptied when a world is torn down (quit to the menu) and filled by
+// the loader when the next one is built. In between the new game's hero already
+// exists (log of 2026-09-11: the same hero pointer before and after the build),
+// so hero presence cannot tell that limbo apart; this can.
+static unsigned world_sections() {
+    uintptr_t b = 0, e = 0;
+    __try {
+        b = *(volatile uintptr_t*)0x00AAB708;
+        e = *(volatile uintptr_t*)0x00AAB70C;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+    if (!b || e < b) return 0;
+    unsigned n = (unsigned)((e - b) / 0x54);
+    if (b == g_sec_block && n >= (unsigned)g_sec_injected) n -= (unsigned)g_sec_injected;
+    return n;
+}
+
+// sacred.world_alive() -> bool: a world's scripts are loaded. False in the
+// menus and between a world's teardown and the next world build.
+static int l_sacred_world_alive(lua_State* L) {
+    lua_pushboolean(L, world_sections() >= 100 ? 1 : 0);
+    return 1;
+}
+
+// sacred.set_new_game_spawn(kx, ky) -> true: every new game puts the hero at
+// (kx, ky) (KompassPos) instead of the campaign start; savegame loads are never
+// moved. sacred.set_new_game_spawn() switches it off.
+static int l_sacred_set_new_game_spawn(lua_State* L) {
+    if (lua_isnoneornil(L, 1)) {
+        g_ng_spawn_on = false;
+    } else {
+        g_ng_spawn_kx = (int)luaL_checkinteger(L, 1);
+        g_ng_spawn_ky = (int)luaL_checkinteger(L, 2);
+        g_ng_spawn_on = true;
+    }
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
 // Called from heartbeat(), outside the Lua guard, on the game thread.
 static void vars_tick() {
-    if (!g_qs_patched && !g_qs_warned) {
-        HMODULE exe = g_attach.exe_module;
-        if (exe && (uintptr_t)exe == 0x00400000) {
-            bool ld = sec_call_is(0x0061C1AC, 0x00465690);
-            bool sv = sec_call_is(0x0061AF02, 0x00465690);
-            if (ld && sv) {                                          // both or neither
-                sec_call_write(0x0061C1AC, (void*)&qs_load_thunk);
-                sec_call_write(0x0061AF02, (void*)&qs_save_thunk);
-                g_qs_patched = true;
-                sdk_log("[vars] savegame hooks live (quest-state serializer: load 0x61c1ac, save 0x61af02)");
-            } else {
-                g_qs_warned = true;
-                sdk_log("[vars] savegame call sites not as expected (load %d, save %d): "
-                        "no SDK:SAVE_LOADED", ld ? 1 : 0, sv ? 1 : 0);
-            }
+    HMODULE exe = g_attach.exe_module;
+    bool exe_ok = exe && (uintptr_t)exe == 0x00400000;
+    if (exe_ok && !g_qs_patched && !g_qs_warned) {
+        bool ld = sec_call_is(0x0061C1AC, 0x00465690);
+        bool sv = sec_call_is(0x0061AF02, 0x00465690);
+        if (ld && sv) {                                              // both or neither
+            sec_call_write(0x0061C1AC, (void*)&qs_load_thunk);
+            sec_call_write(0x0061AF02, (void*)&qs_save_thunk);
+            g_qs_patched = true;
+            sdk_log("[vars] savegame hooks live (quest-state serializer: load 0x61c1ac, save 0x61af02)");
+        } else {
+            g_qs_warned = true;
+            sdk_log("[vars] savegame call sites not as expected (load %d, save %d): "
+                    "no SDK:SAVE_LOADED", ld ? 1 : 0, sv ? 1 : 0);
         }
+    }
+    if (exe_ok && !g_ld_patched && !g_ld_warned) {
+        bool ng = sec_call_is(0x0060C2DC, 0x0046F9B0);
+        bool ld = sec_call_is(0x004676B7, 0x0046F9B0);
+        if (ng && ld) {                                              // both or neither
+            sec_call_write(0x0060C2DC, (void*)&ld_newgame_thunk);
+            sec_call_write(0x004676B7, (void*)&ld_load_thunk);
+            g_ld_patched = true;
+            sdk_log("[vars] world-build hooks live (script loader: new game 0x60c2dc, savegame 0x4676b7)");
+        } else {
+            g_ld_warned = true;
+            sdk_log("[vars] world-build call sites not as expected (new game %d, savegame %d): "
+                    "world_serial stays 0, no new-game spawn", ng ? 1 : 0, ld ? 1 : 0);
+        }
+    }
+    LONG wb = g_world_builds;
+    if (wb != g_world_builds_seen) {
+        LONG ngb = g_newgame_builds;
+        sdk_log("[vars] world build #%ld: %s", wb,
+                ngb != g_newgame_builds_seen ? "a new game" : "a savegame load");
+        g_world_builds_seen   = wb;
+        g_newgame_builds_seen = ngb;
     }
     LONG s = g_qs_saves;
     if (s != g_qs_saves_seen) {
