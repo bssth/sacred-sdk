@@ -971,11 +971,12 @@ static int questbook_set_log_impl(uint32_t quest_id, int page,
         // "primary" because 3 == main category. Match an active SIDE
         // quest exactly:
         // +0x00 = quest CATEGORY: 3 = MAIN/story, 4 = side. The journal
-        // builder FUN_006b07e0:109 tests `==3` to pick the main-quest
-        // icon set + the active-quest header — so 3 is what makes 9550
-        // render as a STORY quest (was 4 = secondary). (If SDK side
-        // quests are added later, parameterize this per quest_id.)
-        *(uint32_t*)(e + QB_ENTRY_OFF_TYPE) = 3;   // 3 = MAIN/story
+        // builder FUN_006b07e0:109 tests `==3` for the main-quest icon set
+        // and the active-quest header, and the world map follows the same
+        // field. Vanilla picks it by id (TriggerQuest FUN_0046c160): ids
+        // 1..99 are story, 100 and up are side quests — so an SDK quest
+        // chooses its look with its id.
+        *(uint32_t*)(e + QB_ENTRY_OFF_TYPE) = (quest_id <= 99) ? 3u : 4u;
         *(uint32_t*)(e + QB_ENTRY_OFF_KIND) = 2;   // 2 = active state
         // Active bullet = +0x0C bit0 (vanilla active = 1). Set bit0 via a
         // masked RMW instead of a whole-word write so a step state stamped
@@ -1148,10 +1149,18 @@ static int questbook_set_marker_impl(uint32_t quest_id, int32_t wx, int32_t wy) 
         // that was exactly why the map showed secondary while the
         // journal (also +0x00==3) showed primary. entry +0x00=3 /
         // +0x04=2 are already set by questbook_set_log_impl.
+        // Slot 3 is a LEASE, not a flag (FUN_004a5980:212-221): +0x7718 is a
+        // start timestamp in ms and +0x771c a lifetime in ms; the engine drops
+        // the marker once start + lifetime is in the past, and ignores it
+        // entirely while +0x7718 is 0. The group compass writes
+        // (now_ms, 60000) and clears both when the group dies. We do not know
+        // the engine's clock here, so start at 1 with a lifetime of about 12
+        // days: that never expires in a session. Writing 0 as the lifetime is
+        // what made the white arrow blink once and vanish.
         *(uint32_t*)(mgr + QB_S3_X)   = (uint32_t)wx;
         *(uint32_t*)(mgr + QB_S3_Y)   = (uint32_t)wy;
-        *(uint32_t*)(mgr + QB_S3_ON)  = 1;
-        *(uint32_t*)(mgr + QB_S3_AUX) = 0;
+        *(uint32_t*)(mgr + QB_S3_ON)  = 1;            // start (ms); must be non-zero
+        *(uint32_t*)(mgr + QB_S3_AUX) = 0x40000000;   // lifetime (ms)
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         sdk_log("[questbook] set_marker write faulted");
         return -1;
@@ -1159,6 +1168,28 @@ static int questbook_set_marker_impl(uint32_t quest_id, int32_t wx, int32_t wy) 
     (void)C;
     sdk_log("[questbook] set_marker quest_id=%u idx=%d x=%d y=%d "
             "(slot-3 PRIMARY, category-aware)", quest_id, found, wx, wy);
+    return 0;
+}
+
+// Switch the slot-3 marker off (the forced white primary arrow). A STORY quest
+// (id 1..99, and vanilla runs one at a time) can then show its arrow the
+// vanilla way, from the tracked-quest column plus the entry's own coordinates.
+// Side quests (id 100 and up) have that path gated by the engine
+// (entry+8 <= 100) and keep slot 3 — a single global store that the group
+// compass (GroupIsDead) also takes over while a group lives.
+static int questbook_clear_marker_impl() {
+    uintptr_t mgr = g_quest_mgr;
+    if (!mgr) return -1;
+    __try {
+        *(uint32_t*)(mgr + QB_S3_ON)  = 0;
+        *(uint32_t*)(mgr + QB_S3_X)   = 0;
+        *(uint32_t*)(mgr + QB_S3_Y)   = 0;
+        *(uint32_t*)(mgr + QB_S3_AUX) = 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        sdk_log("[questbook] clear_marker: write faulted");
+        return -1;
+    }
+    sdk_log("[questbook] clear_marker: slot-3 off");
     return 0;
 }
 
@@ -2039,7 +2070,19 @@ static int questbook_track_impl(uint32_t quest_id, int handle) {
             *(uint32_t*)(e + 0x10) = 0xFFFFFFFFu;      // -1 = "resolve +0x14 as a creature"
             *(uint32_t*)(e + 0x14) = (uint32_t)handle;
         }
-        *(int32_t*)(mgr + 0x3a4 + (uintptr_t)C * 8) = found;   // tracked (primary) quest
+        // The per-class marker columns the engine's own marker source
+        // FUN_004a5980 reads: story ids (1..99) at qm+0x39c + C*8 (its
+        // `(&DAT_00aad31c)[C*2]`, i.e. 0x00AAD31C + C*8 = qm+0x39c + C*8) and
+        // side ids at qm+0x3a0 + C*8. This used to write 0x3a4 + C*8 for the
+        // story case, which is class C+1's slot, so the story arrow stayed
+        // dark while the side arrow worked. The engine's own writers are
+        // FUN_0048d930:32-38 / FUN_0046c160:134 (story) and FUN_0049dab0:11
+        // (side). Gates: entry+8 <= 100 and entry+4 <= 99 for story (a solved
+        // quest, +4 = 100, loses its arrow by itself); side also refuses ids
+        // 9000..9499 and fades the arrow within entry+0x20 of the hero.
+        // The arrow colours differ: story slot 0 is red, side slot 1 green,
+        // and the white one is the slot-3 marker below.
+        *(int32_t*)(mgr + ((quest_id <= 99) ? 0x39c : 0x3a0) + (uintptr_t)C * 8) = found;
         ((fn_kompass_resolve)(reb + 0x004A6450))((void*)mgr, (unsigned)found);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         sdk_log("[questbook] track: faulted (quest_id=%u)", quest_id);
@@ -2070,6 +2113,12 @@ static int l_sacred_questbook_set_marker(lua_State* L) {
     int32_t wy = (int32_t)luaL_checkinteger(L, 3);
     int r = questbook_set_marker_impl((uint32_t)qid, wx, wy);
     lua_pushboolean(L, r == 0 ? 1 : 0);
+    return 1;
+}
+
+// sacred.questbook_clear_marker() -> bool   (the forced slot-3 arrow off)
+static int l_sacred_questbook_clear_marker(lua_State* L) {
+    lua_pushboolean(L, questbook_clear_marker_impl() == 0 ? 1 : 0);
     return 1;
 }
 
@@ -2283,6 +2332,7 @@ void install_lua_api(lua_State* L) {
     lua_pushcfunction(L, l_sacred_questbook_track);       lua_setfield(L, -2, "questbook_track");
     lua_pushcfunction(L, l_sacred_dialog_speaker);        lua_setfield(L, -2, "dialog_speaker");
     lua_pushcfunction(L, l_sacred_questbook_set_marker);    lua_setfield(L, -2, "questbook_set_marker");
+    lua_pushcfunction(L, l_sacred_questbook_clear_marker);  lua_setfield(L, -2, "questbook_clear_marker");
     lua_pushcfunction(L, l_sacred_questbook_set_step_done); lua_setfield(L, -2, "questbook_set_step_done");
     lua_pushcfunction(L, l_sacred_questbook_add_log);       lua_setfield(L, -2, "questbook_add_log");
     lua_pushcfunction(L, l_sacred_questbook_mark_solved);   lua_setfield(L, -2, "questbook_mark_solved");
