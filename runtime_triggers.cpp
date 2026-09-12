@@ -2394,6 +2394,9 @@ void install_lua_api(lua_State* L) {
     lua_pushcfunction(L, l_sacred_hero_has_item);           lua_setfield(L, -2, "hero_has_item");
     lua_pushcfunction(L, l_sacred_hero_put_item);           lua_setfield(L, -2, "hero_put_item");
     lua_pushcfunction(L, l_sacred_hero_take_item);          lua_setfield(L, -2, "hero_take_item");
+    lua_pushcfunction(L, l_sacred_npc_revive);              lua_setfield(L, -2, "npc_revive");
+    lua_pushcfunction(L, l_sacred_creature_class);          lua_setfield(L, -2, "creature_class");
+    lua_pushcfunction(L, l_sacred_creature_class_set);      lua_setfield(L, -2, "creature_class_set");
     lua_pushcfunction(L, l_sacred_quest_register);          lua_setfield(L, -2, "quest_register");
     lua_pushcfunction(L, l_sacred_quest_state);             lua_setfield(L, -2, "quest_state");
     lua_pushcfunction(L, l_sacred_quest_flags);             lua_setfield(L, -2, "quest_flags");

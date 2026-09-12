@@ -213,3 +213,84 @@ static int l_sacred_hero_take_item(lua_State* L) {
     lua_pushinteger(L, took);
     return 1;
 }
+
+// ---- creature type classes: the engine's own "this one does not die" ----------
+// The death path asks the TYPE, not the creature: `FUN_00426a80(type)` returns
+// true when the type's class byte is 5, and both death sites then skip dying
+// while the creature's max health is non-zero (@0x533c88 and @0x534778:
+// `call 0x426a80; test al,al; je <die>; mov eax,[ebp+0x4d4]; test eax,eax;
+// jne <skip>`). That is how a shipped quest companion survives a beating.
+//
+// Where the byte lives: the type manager (*0x00AAB5E4) holds a per-type record
+// of 0x80 bytes; its +0x1a is a u16 index into a second table at
+// manager+0x563008 with a stride of 0x56, and the class byte is at +4 of that
+// entry. Sibling helpers test the same byte for 2 (0x426ad0) and 9 (0x426b20),
+// so the byte is a category, and 5 is the death-skipping one.
+static uint8_t* creature_class_ptr(int type) {
+    if (type <= 0 || type >= 0x7E60) return nullptr;
+    __try {
+        uintptr_t tm = *(uintptr_t*)0x00AAB5E4;
+        if (!tm) return nullptr;
+        uint16_t idx = *(uint16_t*)(tm + (uintptr_t)type * 0x80 + 0x1A);
+        uintptr_t tbl = *(uintptr_t*)(tm + 0x563008);
+        if (!tbl) return nullptr;
+        return (uint8_t*)(tbl + (uintptr_t)idx * 0x56 + 4);
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+}
+
+// sacred.creature_class(type) -> class | nil
+static int l_sacred_creature_class(lua_State* L) {
+    int type = (int)luaL_checkinteger(L, 1);
+    uint8_t* p = creature_class_ptr(type);
+    if (!p) { lua_pushnil(L); return 1; }
+    uint8_t v = 0;
+    __try { v = *p; } __except (EXCEPTION_EXECUTE_HANDLER) { lua_pushnil(L); return 1; }
+    lua_pushinteger(L, v);
+    return 1;
+}
+
+// sacred.creature_class_set(type, class) -> old | nil
+// Writing 5 makes every creature of that type survive a killing blow (the engine
+// skips the death). It is a TYPE-wide change, so use a type your mod owns.
+static int l_sacred_creature_class_set(lua_State* L) {
+    int type = (int)luaL_checkinteger(L, 1);
+    int cls  = (int)luaL_checkinteger(L, 2);
+    if (cls < 0 || cls > 255) return luaL_error(L, "creature_class_set: class 0..255");
+    uint8_t* p = creature_class_ptr(type);
+    if (!p) { lua_pushnil(L); return 1; }
+    uint8_t old = 0;
+    __try { old = *p; *p = (uint8_t)cls; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { lua_pushnil(L); return 1; }
+    sdk_log("[types] creature type %d class %u -> %u", type, old, (unsigned)cls);
+    lua_pushinteger(L, old);
+    return 1;
+}
+
+// ---- putting a fallen companion back on his feet ------------------------------
+// FUN_0053e460 is the engine's own "restore this creature": it sets health back
+// to its maximum (+0x4d8 and +0x4d0 from +0x4d4 @0x53e554-0x53e567) and clears
+// the fields around it. The engine calls it on the party paths -- when a member
+// is dropped or released, FUN_0054d380 @0x54d3ad runs it first if the creature
+// carries the "gets back up" bit (+0x2B7 bit 8), and the release path in
+// FUN_0052e590 @0x52e723 does the same with the argument 0. Argument 0 is the
+// one without the gold penalty branch, so that is what we pass.
+typedef void (__thiscall* fn_restore_t)(void* creature, int mode);
+static const fn_restore_t kRestore = (fn_restore_t)0x0053E460;
+
+// sacred.npc_revive(handle) -> bool
+// Health back to full through the engine's own routine. Whether a creature the
+// engine already marked as fallen stands up again is the engine's business --
+// persona.lua falls back to putting the character in the world again.
+static int l_sacred_npc_revive(lua_State* L) {
+    int h = (int)luaL_checkinteger(L, 1);
+    bool ok = false;
+    __try {
+        uintptr_t om = *(uintptr_t*)0x00AD5C40;
+        uintptr_t arr = om ? *(uintptr_t*)(om + 4) : 0;
+        void* c = (arr && h > 0) ? *(void**)(arr + (uintptr_t)h * 4) : nullptr;
+        if (c) { kRestore(c, 0); ok = true; }
+    } __except (EXCEPTION_EXECUTE_HANDLER) { ok = false; }
+    sdk_log("[npc] revive h=%d -> %s", h, ok ? "called" : "failed");
+    lua_pushboolean(L, ok ? 1 : 0);
+    return 1;
+}
