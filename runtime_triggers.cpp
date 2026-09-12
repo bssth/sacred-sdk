@@ -2384,6 +2384,9 @@ void install_lua_api(lua_State* L) {
     lua_pushcfunction(L, l_sacred_world_alive);             lua_setfield(L, -2, "world_alive");
     lua_pushcfunction(L, l_sacred_set_new_game_spawn);      lua_setfield(L, -2, "set_new_game_spawn");
     lua_pushcfunction(L, l_sacred_section_run);             lua_setfield(L, -2, "section_run");
+    lua_pushcfunction(L, l_sacred_object_by_name);          lua_setfield(L, -2, "object_by_name");
+    lua_pushcfunction(L, l_sacred_object_at);               lua_setfield(L, -2, "object_at");
+    lua_pushcfunction(L, l_sacred_name_register);           lua_setfield(L, -2, "name_register");
     lua_pushcfunction(L, l_sacred_kill_counters);           lua_setfield(L, -2, "kill_counters");
     lua_pushcfunction(L, l_sacred_collect_counters);        lua_setfield(L, -2, "collect_counters");
     lua_pushcfunction(L, l_sacred_hero_items);              lua_setfield(L, -2, "hero_items");

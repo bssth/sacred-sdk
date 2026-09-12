@@ -464,12 +464,93 @@ typedef unsigned (__cdecl* run_section_t)(const char* name, void* creature, int 
 static const run_section_t kRunSectionByName = (run_section_t)0x0046BF40;
 constexpr int SEC_RUN_MAX = 16;
 static char   g_run_q[SEC_RUN_MAX][64];
+static int    g_run_h[SEC_RUN_MAX];          // context object handle, 0 = none
 static int    g_run_n = 0;
 
-static unsigned run_section_now(const char* name, bool* fault) {
+// The object manager's handle table: om = *0x00AD5C40, its array at +4, one
+// pointer per handle. The same walk npc_* and the Lua probes use.
+static void* object_from_handle(int h) {
+    if (h <= 0) return nullptr;
+    __try {
+        uintptr_t om = *(uintptr_t*)0x00AD5C40;
+        if (!om) return nullptr;
+        uintptr_t arr = *(uintptr_t*)(om + 4);
+        if (!arr) return nullptr;
+        return *(void**)(arr + (uintptr_t)h * 4);
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+}
+
+// A named world object's handle: the engine's own two steps, as SetObjState and
+// FillChest do it -- name -> id (FUN_00465070, thiscall on the quest manager),
+// id -> handle (FUN_00464bd0, the name tree at qm+0x7668; ids <= 0x10 ARE the
+// handle). This is how a CreateObj op-0x29 name is found again.
+typedef int  (__thiscall* name_to_id_t)(void* qm, const char* name, int flag);
+typedef char (__thiscall* id_to_handle_t)(void* qm, int id, int* out);
+static const name_to_id_t   kNameToId   = (name_to_id_t)0x00465070;
+static const id_to_handle_t kIdToHandle = (id_to_handle_t)0x00464BD0;
+
+// A world object by type and place. CreateObj's op-0x29 name only binds when
+// that name is ALREADY in the engine's name table (`FUN_00485c10` @0x487f1f
+// compares it against the qm+0x765c entries and registers the object only on a
+// match), so a name the SDK invented is never findable. Type (+0x10 & 0xFFFF)
+// and world position (+0x1C / +0x20, KompassPos * 53.66563) are on every
+// cObject, so this finds what we just created. Returns the nearest match.
+static int object_handle_at(int type, int32_t kx, int32_t ky, int radius) {
+    int best = 0;
+    double best_d = 0;
+    __try {
+        uintptr_t om = *(uintptr_t*)0x00AD5C40;
+        if (!om) return 0;
+        uintptr_t arr = *(uintptr_t*)(om + 4), arr_end = *(uintptr_t*)(om + 8);
+        if (!arr || arr_end <= arr) return 0;
+        unsigned n = (unsigned)((arr_end - arr) / 4);
+        if (n > 65536) n = 65536;
+        const double B = 53.66563034057617, A = 0.5;
+        for (unsigned h = 1; h < n; h++) {
+            uintptr_t o = *(uintptr_t*)(arr + (uintptr_t)h * 4);
+            if (!o) continue;
+            if ((int)(*(uint32_t*)(o + 0x10) & 0xFFFF) != type) continue;
+            int32_t wx = *(int32_t*)(o + 0x1C), wy = *(int32_t*)(o + 0x20);
+            double ox = (double)wx / B - A + 0.5, oy = (double)wy / B - A + 0.5;
+            double dx = ox - (double)kx, dy = oy - (double)ky;
+            double d = dx * dx + dy * dy;
+            if (d > (double)radius * radius) continue;
+            if (!best || d < best_d) { best = (int)h; best_d = d; }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+    return best;
+}
+
+static int object_handle_by_name(const char* name) {
+    int out = 0;
+    __try {
+        void* qm = (void*)0x00AACF80;
+        int id = kNameToId(qm, name, 0);
+        if (id == 0 || id == -1) return 0;
+        if (!kIdToHandle(qm, id, &out)) return 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+    return out;
+}
+
+// Give a NEW name an id, so records can address an object by it. The engine's
+// own registrar: FUN_00465070 with its flag byte set walks the name table
+// (qm+0x765c, stride 0x48, id at entry+0x44), and when the name is not there it
+// takes the first free id from the reserved dynamic range 0x2076..0x20CF
+// (@0x46517a, @0x4651c9 -- 89 slots), then appends a table entry through
+// FUN_00464760. Without this a CreateObj op-0x29 name is silently dropped:
+// FUN_00485c10 @0x487f1f only binds an object to a name already in that table.
+static int object_name_register(const char* name) {
+    int id = -1;
+    __try { id = kNameToId((void*)0x00AACF80, name, 1); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return -1; }
+    return id;
+}
+
+static unsigned run_section_now(const char* name, int handle, bool* fault) {
     unsigned rc = 0;
     *fault = false;
-    __try { rc = kRunSectionByName(name, nullptr, 0); }
+    void* ctx = object_from_handle(handle);
+    __try { rc = kRunSectionByName(name, ctx, 0); }
     __except (EXCEPTION_EXECUTE_HANDLER) { *fault = true; }
     return rc;
 }
@@ -483,8 +564,10 @@ static void sections_run_queued() {
     // QIS indices before a SetUpQuest record in this same queue runs.
     if (g_sec_patched) { sections_inject(); quests_inject(); }
     char q[SEC_RUN_MAX][64];
+    int  h[SEC_RUN_MAX];
     int n = g_run_n;
     memcpy(q, g_run_q, sizeof q);
+    memcpy(h, g_run_h, sizeof h);
     g_run_n = 0;
     bool ok = g_sec_patched && world_sections() >= 100;
     for (int i = 0; i < n; i++) {
@@ -494,20 +577,66 @@ static void sections_run_queued() {
             continue;
         }
         bool fault = false;
-        unsigned rc = run_section_now(q[i], &fault);
-        sdk_log("[sections] run '%s' -> %s0x%08x", q[i], fault ? "FAULT " : "", rc);
+        unsigned rc = run_section_now(q[i], h[i], &fault);
+        if (h[i]) sdk_log("[sections] run '%s' as #%d -> %s0x%08x",
+                          q[i], h[i], fault ? "FAULT " : "", rc);
+        else      sdk_log("[sections] run '%s' -> %s0x%08x", q[i], fault ? "FAULT " : "", rc);
     }
 }
 
-// sacred.section_run(name) -> true | false: run a section (an SDK section, or a
-// vanilla one by name) through the engine on the next heartbeat.
+// sacred.section_run(name [, handle]) -> true | false: run a section (an SDK
+// section, or a vanilla one by name) through the engine on the next heartbeat.
+// With a handle the object behind it becomes the section's CONTEXT -- what the
+// engine passes as the record's creature. Records that act on "the object this
+// section belongs to" need it: FillChest fills the context object and does
+// nothing at all when the context is not a container (the engine runs a Take:
+// hook with the HERO as context, so a chest must be filled this way).
 static int l_sacred_section_run(lua_State* L) {
     size_t n = 0;
     const char* name = luaL_checklstring(L, 1, &n);
+    int handle = (int)luaL_optinteger(L, 2, 0);
     if (n < 1 || n > 63 || g_run_n >= SEC_RUN_MAX) { lua_pushboolean(L, 0); return 1; }
     memcpy(g_run_q[g_run_n], name, n + 1);
+    g_run_h[g_run_n] = handle;
     g_run_n++;
     lua_pushboolean(L, 1);
+    return 1;
+}
+
+// sacred.object_at(type, kx, ky [, radius=2]) -> handle | nil
+// The nearest object of that type within `radius` tiles -- how the SDK finds an
+// object a CreateObj record just placed, since a name it invented does not bind.
+static int l_sacred_object_at(lua_State* L) {
+    int type = (int)luaL_checkinteger(L, 1);
+    int32_t kx = (int32_t)luaL_checkinteger(L, 2);
+    int32_t ky = (int32_t)luaL_checkinteger(L, 3);
+    int r = (int)luaL_optinteger(L, 4, 2);
+    int h = object_handle_at(type, kx, ky, r);
+    if (h <= 0) { lua_pushnil(L); return 1; }
+    lua_pushinteger(L, h);
+    return 1;
+}
+
+// sacred.name_register(name) -> id | nil
+// Put `name` in the engine's name table (or return the id it already has), so a
+// CreateObj / SetObjState / compass record can address an object by that name.
+// The dynamic pool holds 89 names; nil means it is full or the name is unusable.
+static int l_sacred_name_register(lua_State* L) {
+    const char* name = luaL_checkstring(L, 1);
+    int id = object_name_register(name);
+    if (id <= 0) { lua_pushnil(L); return 1; }
+    lua_pushinteger(L, id);
+    return 1;
+}
+
+// sacred.object_by_name(name) -> handle | nil
+// The handle of the world object a CreateObj op-0x29 name (or any engine name)
+// points at, so Lua can act on an object a record created.
+static int l_sacred_object_by_name(lua_State* L) {
+    const char* name = luaL_checkstring(L, 1);
+    int h = object_handle_by_name(name);
+    if (h <= 0) { lua_pushnil(L); return 1; }
+    lua_pushinteger(L, h);
     return 1;
 }
 
