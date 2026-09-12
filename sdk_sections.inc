@@ -35,7 +35,7 @@ constexpr int      SDK_SEC_MAX    = 256;
 constexpr uint32_t SDK_SEC_STORE  = 256u * 1024u;
 constexpr uint32_t SDK_SEC_MAXLEN = 0x3F00u;         // WorkFunktion's stack buffer is ~16 KB
 
-struct SdkSection { char name[64]; uint32_t off; uint32_t len; };
+struct SdkSection { char name[64]; uint32_t off; uint32_t len; int32_t owner; };
 static SdkSection    g_sec[SDK_SEC_MAX];
 static int           g_sec_n        = 0;
 static uint8_t       g_sec_store[SDK_SEC_STORE];
@@ -44,6 +44,7 @@ static uint32_t      g_sec_used     = 0;
 static uintptr_t     g_sec_block    = 0;              // our table block (0 = not injected yet)
 static unsigned      g_sec_vanilla  = 0;              // engine entries below ours
 static int           g_sec_injected = 0;              // how many of ours are in the block
+static unsigned      g_sec_gen      = 0;              // bumped on every (re)inject: our indices moved
 static bool          g_sec_patched  = false;
 static bool          g_sec_warned   = false;
 
@@ -115,7 +116,7 @@ static void sec_write_entry(uint8_t* e, const SdkSection& s) {
     strncpy_s((char*)e, 64, s.name, _TRUNCATE);
     *(uint32_t*)(e + 0x40) = SDK_SEC_VBASE + s.off;
     *(uint32_t*)(e + 0x44) = s.len;
-    *(int32_t*) (e + 0x48) = -1;                       // global: no quest gate
+    *(int32_t*) (e + 0x48) = s.owner;                  // -1 = global: no quest gate
 }
 
 static void sections_inject() {
@@ -137,6 +138,7 @@ static void sections_inject() {
         *(uintptr_t*)0x00AAB70C = (uintptr_t)(blk + (size_t)total * 0x54);
         *(uintptr_t*)0x00AAB710 = (uintptr_t)(blk + (size_t)total * 0x54);
         g_sec_block = (uintptr_t)blk; g_sec_vanilla = vanilla; g_sec_injected = g_sec_n;
+        g_sec_gen++;                                   // our indices moved: sdk_quests.inc re-resolves
         sdk_log("[sections] table %u -> %u entries (SDK sections #%u..#%u)",
                 vanilla, total, vanilla, total - 1);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -181,14 +183,18 @@ static int sec_find(const char* name) {
     return -1;
 }
 
-// sacred.section_define(name, bytes) -> SDK section number
+// sacred.section_define(name, bytes [, owner_quest]) -> SDK section number
 // Registers (or replaces) a script section built from raw record bytes (see
 // custom/lua/lib/sections.lua). It enters the engine's section table on the
-// next tick and is found by name like any vanilla section.
+// next tick and is found by name like any vanilla section. `owner_quest` is the
+// section entry's +0x48: -1 (the default) is a global section, a quest id makes
+// WorkFunktion refuse to run it until that quest is set up, exactly as it gates
+// the 6,196 quest-owned vanilla sections (MECHANICS §1.4).
 static int l_sacred_section_define(lua_State* L) {
     const char* name = luaL_checkstring(L, 1);
     size_t len = 0;
     const char* bytes = luaL_optlstring(L, 2, "", &len);
+    int32_t owner = (int32_t)luaL_optinteger(L, 3, -1);
     size_t nl = strlen(name);
     if (nl < 1 || nl > 63) return luaL_error(L, "section_define: name must be 1..63 chars");
     if (len > SDK_SEC_MAXLEN) return luaL_error(L, "section_define: %d bytes > %d", (int)len, (int)SDK_SEC_MAXLEN);
@@ -203,8 +209,9 @@ static int l_sacred_section_define(lua_State* L) {
     }
     memcpy(g_sec_store + g_sec_used, bytes, len);
     g_sec_store[g_sec_used + len] = 0;
-    g_sec[i].off = g_sec_used;
-    g_sec[i].len = (uint32_t)len;
+    g_sec[i].off   = g_sec_used;
+    g_sec[i].len   = (uint32_t)len;
+    g_sec[i].owner = owner;
     g_sec_used += need;
     if (fresh) g_sec_n++;
     if (g_sec_block && i < g_sec_injected) {           // redefinition: keep the live entry in step
@@ -212,9 +219,11 @@ static int l_sacred_section_define(lua_State* L) {
             uint8_t* e = (uint8_t*)(g_sec_block + (size_t)(g_sec_vanilla + (unsigned)i) * 0x54);
             *(uint32_t*)(e + 0x40) = SDK_SEC_VBASE + g_sec[i].off;
             *(uint32_t*)(e + 0x44) = g_sec[i].len;
+            *(int32_t*) (e + 0x48) = g_sec[i].owner;
         } __except (EXCEPTION_EXECUTE_HANDLER) {}
     }
-    sdk_log("[sections] define '%s' %u bytes (sdk #%d%s)", name, (unsigned)len, i, fresh ? "" : ", replaced");
+    sdk_log("[sections] define '%s' %u bytes owner=%d (sdk #%d%s)",
+            name, (unsigned)len, owner, i, fresh ? "" : ", replaced");
     lua_pushinteger(L, i);
     return 1;
 }

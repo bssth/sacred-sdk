@@ -1550,6 +1550,7 @@ static int l_sacred_npc_talkable(lua_State* L) {
 
 // SDK-owned script sections: own Dialog: nodes and button handlers.
 #include "sdk_sections.inc"
+#include "sdk_quests.inc"    // SDK entries in the engine's quest registry (uses the sections helpers)
 #include "sdk_vars.inc"      // script variables + savegame hooks (uses the sections helpers)
 #include "sdk_items.inc"     // the hero's items: backpack, equipment, quest-item list
 
@@ -2390,6 +2391,9 @@ void install_lua_api(lua_State* L) {
     lua_pushcfunction(L, l_sacred_hero_has_item);           lua_setfield(L, -2, "hero_has_item");
     lua_pushcfunction(L, l_sacred_hero_put_item);           lua_setfield(L, -2, "hero_put_item");
     lua_pushcfunction(L, l_sacred_hero_take_item);          lua_setfield(L, -2, "hero_take_item");
+    lua_pushcfunction(L, l_sacred_quest_register);          lua_setfield(L, -2, "quest_register");
+    lua_pushcfunction(L, l_sacred_quest_state);             lua_setfield(L, -2, "quest_state");
+    lua_pushcfunction(L, l_sacred_quest_flags);             lua_setfield(L, -2, "quest_flags");
     lua_pushcfunction(L, l_sacred_hero_qbit);               lua_setfield(L, -2, "hero_qbit");
     lua_pushcfunction(L, l_sacred_hero_qbit_set);           lua_setfield(L, -2, "hero_qbit_set");
     lua_pushcfunction(L, l_sacred_difficulty);              lua_setfield(L, -2, "difficulty");
@@ -2508,6 +2512,7 @@ void heartbeat() {
     if (!g_ready || !g_L) return;
     vars_tick();              // savegame hooks: patch once, SDK:SAVE_LOADED after a load
     sections_tick();          // SDK sections: patch once, keep injected, run button callbacks
+    quests_tick();            // SDK quest-registry entries, after the sections they name
     sections_run_queued();    // sacred.section_run, after the inject above
     kill_probe_tick();        // gap 4 probe: log every kill-counter call
     fire_tick();

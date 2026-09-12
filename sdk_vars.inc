@@ -479,7 +479,9 @@ static void sections_run_queued() {
     if (!g_run_n) return;
     // A section defined by this tick's SECTION: callbacks (fired inside
     // sections_tick, after its inject) must enter the table before it runs.
-    if (g_sec_patched) sections_inject();
+    // The registry follows: a quest registered this tick must carry the right
+    // QIS indices before a SetUpQuest record in this same queue runs.
+    if (g_sec_patched) { sections_inject(); quests_inject(); }
     char q[SEC_RUN_MAX][64];
     int n = g_run_n;
     memcpy(q, g_run_q, sizeof q);
