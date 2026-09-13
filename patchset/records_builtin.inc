@@ -79,6 +79,75 @@ static const Site k_dbg_sites[] = {
     { 0x0081145Fu, 2, k_dbg_expect, k_dbg_bytes, nullptr, 0 },
 };
 
+// ---------------------------------------------------------------------------
+// 2.29 change 4 / 2.30 change 4 — chat crash.
+// FUN_0084C0D3 is the engine's wcsncpy(dst, src, count): copy up to `count`
+// UTF-16 units, stop at the terminator, zero-fill the rest. A malformed network
+// chat message hands it a garbage `src` and the copy loop faults. Thorium puts
+// an IsBadReadPtr(src, count) check in front of the loop.
+//
+// Site (6 bytes, whole instructions):
+//   0084C0E1  74 28          je   0084C10B        ; count == 0 -> return
+//   0084C0E3  8B 54 24 10    mov  edx, [esp+10h]  ; edx = src
+//   0084C0E7                 (loop head: mov ax, [edx])
+// becomes  E9 <stub> 90.
+//
+// Stub. Both jump-back targets are derived from the site, not hardcoded: the
+// return is site+2+int8(0x28) and the loop head is site+6.
+//    0  0F 84 rel32        je   return             ; flags still from `test ecx, ecx`
+//    6  8B 54 24 10        mov  edx, [esp+10h]     ; replayed from the site
+//   10  51 52              push ecx; push edx      ; IsBadReadPtr clobbers both
+//   12  51 52              push ecx; push edx      ; (lp = src, ucb = count)
+//   14  FF 15 abs32        call [kernel32!IsBadReadPtr]
+//   20  5A 59              pop  edx; pop ecx
+//   22  85 C0              test eax, eax
+//   24  0F 84 rel32        je   loop_head          ; readable -> run the copy
+//   30  66 C7 07 00 00     mov  word ptr [edi], 0  ; unreadable -> empty string
+//   35  E9 rel32           jmp  return
+//
+// One deliberate difference from Thorium: on the unreadable path his stub
+// returned with `dst` untouched. Two of the three callers copy into an
+// uninitialised stack buffer, so that left garbage with no terminator for the
+// next string routine to run off the end of. Writing an empty string first is
+// strictly safer and changes nothing on the readable path.
+//
+// Default OFF until a live run confirms it: FUN_0084C0D3 is not chat-only, its
+// other two callers copy 8-unit strings, so a mistake here would show up well
+// beyond multiplayer chat.
+// ---------------------------------------------------------------------------
+static const ImportRef k_chat_imports[] = {
+    { "kernel32.dll", "IsBadReadPtr" },
+};
+static const uint8_t k_chat_stub[] = {
+    0x0F, 0x84, 0x00, 0x00, 0x00, 0x00,        // je   return
+    0x8B, 0x54, 0x24, 0x10,                    // mov  edx, [esp+10h]
+    0x51, 0x52,                                // push ecx; push edx
+    0x51, 0x52,                                // push ecx; push edx
+    0xFF, 0x15, 0x00, 0x00, 0x00, 0x00,        // call [IsBadReadPtr]
+    0x5A, 0x59,                                // pop edx; pop ecx
+    0x85, 0xC0,                                // test eax, eax
+    0x0F, 0x84, 0x00, 0x00, 0x00, 0x00,        // je   loop_head
+    0x66, 0xC7, 0x07, 0x00, 0x00,              // mov  word ptr [edi], 0
+    0xE9, 0x00, 0x00, 0x00, 0x00,              // jmp  return
+};
+static const Fixup k_chat_stub_fx[] = {
+    {  2, Fix::Rel32SiteJcc8, 0 },   // je   -> site + 2 + 0x28
+    { 16, Fix::Abs32IatSlot,  0 },   // call -> &IAT[IsBadReadPtr]
+    { 26, Fix::Rel32SitePlus, 6 },   // je   -> site + 6 (loop head)
+    { 36, Fix::Rel32SiteJcc8, 0 },   // jmp  -> site + 2 + 0x28
+};
+static const Stub k_chat_stubs[] = {
+    { 0, (uint16_t)sizeof(k_chat_stub), k_chat_stub, k_chat_stub_fx, 4, 0 },
+};
+static const uint8_t k_chat_expect[] = { 0x74, 0x28, 0x8B, 0x54, 0x24, 0x10 };
+static const uint8_t k_chat_bytes [] = { 0xE9, 0x00, 0x00, 0x00, 0x00, 0x90 };
+static const Fixup   k_chat_fx[] = {
+    { 1, Fix::Rel32ToStub, 0 },
+};
+static const Site k_chat_sites[] = {
+    { 0x0084C0E1u, 6, k_chat_expect, k_chat_bytes, k_chat_fx, 1 },
+};
+
 #endif // SDK_PATCH_DATA
 
 #ifdef SDK_PATCH_ROWS
@@ -98,5 +167,9 @@ static const Site k_dbg_sites[] = {
 { "fix_debugger_freeze", "Debugger-freeze fix (surgical)", "fixes",
   "Thorium (SacredVault), unofficial patch 2.29 change 6", "legacy_patch6",
   false, nullptr, 0, nullptr, 0, k_dbg_sites,  1 },
+
+{ "fix_chat_crash", "Chat: survive a bad string pointer", "fixes",
+  "Thorium (SacredVault), unofficial patch 2.29 change 4 / 2.30 change 4", nullptr,
+  false, k_chat_imports, 1, k_chat_stubs, 1, k_chat_sites, 1 },
 
 #endif // SDK_PATCH_ROWS

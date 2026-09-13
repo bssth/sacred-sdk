@@ -167,6 +167,13 @@ struct ApplyCtx {
 
 static bool resolve_fixup(const ApplyCtx& cx, const Fixup& f, uintptr_t write_at,
                           uint32_t* out, char* why, size_t why_n) {
+    const bool site_relative = (f.kind == Fix::Rel32SitePlus ||
+                                f.kind == Fix::Rel32SiteJcc8 ||
+                                f.kind == Fix::Rel32SiteJcc32);
+    if (site_relative && (!cx.site_va || !cx.site_expect)) {
+        _snprintf_s(why, why_n, _TRUNCATE, "site-relative fixup with no anchor site");
+        return false;
+    }
     switch (f.kind) {
         case Fix::None:
             *out = 0; return true;
@@ -327,6 +334,16 @@ static bool apply_record(RecState& rs, uintptr_t reb) {
     for (uint8_t i = 0; i < r.nstubs; ++i) {
         const Stub& st = r.stubs[i];
         uint8_t* dst = (uint8_t*)cx.stub_addr[st.id];
+        // A stub's site-relative fixups resolve against the site it serves. Without
+        // this the context still holds no site at all, and a jump-back fixup would
+        // dereference a null `site_expect`.
+        if (st.anchor_site < r.nsites) {
+            cx.site_va     = reb + r.sites[st.anchor_site].va;
+            cx.site_expect = r.sites[st.anchor_site].expect;
+        } else {
+            cx.site_va     = 0;
+            cx.site_expect = nullptr;
+        }
         for (uint8_t k = 0; k < st.nfx; ++k) {
             uint32_t v = 0;
             if (!resolve_fixup(cx, st.fx[k], (uintptr_t)dst + st.fx[k].ofs, &v, why, sizeof(why))) {
@@ -338,6 +355,19 @@ static bool apply_record(RecState& rs, uintptr_t reb) {
         }
     }
     if (r.nstubs) FlushInstructionCache(GetCurrentProcess(), cave::g_base, cave::used());
+
+    // Log every emitted stub byte for byte. The post-patch .text dump cannot see
+    // the cave, so this line is what lets a stub be disassembled and checked
+    // offline after a live run.
+    for (uint8_t i = 0; i < r.nstubs; ++i) {
+        const Stub& st = r.stubs[i];
+        const uint8_t* p = (const uint8_t*)cx.stub_addr[st.id];
+        char hex[3 * 64 + 1] = {0};
+        for (uint16_t k = 0; k < st.len && k < 64; ++k)
+            _snprintf_s(hex + 3 * k, sizeof(hex) - 3 * k, _TRUNCATE, "%02x ", p[k]);
+        sdk_log("[patchset] %s stub %u @%p (%u bytes): %s",
+                r.key, st.id, (void*)p, (unsigned)st.len, hex);
+    }
 
     // ---- commit: sites -----------------------------------------------------
     for (uint8_t i = 0; i < r.nsites; ++i) {

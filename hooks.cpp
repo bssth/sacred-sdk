@@ -8,6 +8,7 @@
 #include "core/config.h"
 #include "iat_hook.h"
 #include <unknwn.h>
+#include <cstring>
 
 namespace sdk { namespace hooks {
 
@@ -27,6 +28,8 @@ static DirectDrawCreateEx_t     orig_DirectDrawCreateEx     = nullptr;
 static SetWindowPos_t           orig_SetWindowPos           = nullptr;
 static MoveWindow_t             orig_MoveWindow             = nullptr;
 static SetCursor_t              orig_SetCursor              = nullptr;
+typedef HANDLE (WINAPI* CreateMutexA_t)(LPSECURITY_ATTRIBUTES, BOOL, LPCSTR);
+static CreateMutexA_t           orig_CreateMutexA           = nullptr;
 
 ForceConfig g_force = { false, false, 0, 0, false, false, false };
 volatile bool g_main_seen     = false;
@@ -274,6 +277,27 @@ static HCURSOR WINAPI hook_SetCursor(HCURSOR h) {
     return orig_SetCursor(h);
 }
 
+// --- multi-instance ----------------------------------------------------------
+// Sacred refuses to start twice: WinMain creates the named mutex SACRED_INSTANCE
+// and shows "Sacred is already running!" when GetLastError() then reports
+// ERROR_ALREADY_EXISTS. Thorium's unofficial patch 2.30 change 4 NOPs that check
+// inside .text; doing it here touches no engine code at all. The real mutex is
+// still created or opened, so its semantics stay intact — we only clear the
+// last-error value the engine reads on the very next call, and nothing between
+// the two calls touches it. Installed only when [hooks] multi_instance=1.
+static HANDLE WINAPI hook_CreateMutexA(LPSECURITY_ATTRIBUTES sa, BOOL owner, LPCSTR name) {
+    HANDLE h = orig_CreateMutexA(sa, owner, name);
+    if (h && name && strcmp(name, "SACRED_INSTANCE") == 0 &&
+        GetLastError() == ERROR_ALREADY_EXISTS) {
+        // Log first: sdk_log does file I/O, which would overwrite the value
+        // we are about to set.
+        sdk_log("[hooks] SACRED_INSTANCE already held by another Sacred — "
+                "letting this one start (multi_instance=1)");
+        SetLastError(ERROR_SUCCESS);
+    }
+    return h;
+}
+
 void install() {
     HMODULE exe = GetModuleHandleA(nullptr);
     load_config();
@@ -313,6 +337,13 @@ void install() {
         iat::patch(exe, "USER32.dll", "MoveWindow", (void*)hook_MoveWindow);
     orig_SetCursor = (SetCursor_t)
         iat::patch(exe, "USER32.dll", "SetCursor", (void*)hook_SetCursor);
+
+    if (config::get_bool("hooks", "multi_instance", false)) {
+        orig_CreateMutexA = (CreateMutexA_t)
+            iat::patch(exe, "KERNEL32.dll", "CreateMutexA", (void*)hook_CreateMutexA);
+        if (!orig_CreateMutexA)
+            sdk_log("[hooks] multi_instance=1 but CreateMutexA is not imported by name");
+    }
 
     sdk_log("[hooks] done: cwex=%p cds=%p ddc=%p ddcex=%p",
             orig_CreateWindowExA, orig_ChangeDisplaySettingsA,

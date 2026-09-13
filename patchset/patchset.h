@@ -41,12 +41,17 @@ struct Fixup {
 struct ImportRef { const char* dll; const char* fn; };
 
 // A stub emitted into our own RWX cave. Referenced from sites by `id`.
+// `anchor_site` is the index into Record::sites of the site this stub serves.
+// Site-relative fixups inside the stub (Rel32SitePlus / Rel32SiteJcc8 /
+// Rel32SiteJcc32) resolve against that site's address and original bytes, which
+// is what lets a stub jump back into the engine without a hardcoded second VA.
 struct Stub {
     uint8_t        id;
     uint16_t       len;
     const uint8_t* bytes;
     const Fixup*   fx;
     uint8_t        nfx;
+    uint8_t        anchor_site;
 };
 
 // One contiguous run of bytes we overwrite in engine .text.
