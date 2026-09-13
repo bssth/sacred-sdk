@@ -1,0 +1,40 @@
+; SacredSDK runtime config.
+; Rename this file to `sdk.ini` (drop the .example) and place it next to
+; Sacred.exe to activate. Without it, all force toggles are OFF (vanilla behavior).
+;
+; PRE-REQUISITE: patches::patch6 must be active (FUN_00811440 neutralized).
+; Without it the busy-wait force-focus will hang after our display overrides.
+; Verify in the overlay panel before enabling these.
+
+[hooks]
+
+; Strip the title bar / window frame from Sacred's main window and apply our
+; size + screen-center positioning. Sacred renders to its client area, so this
+; effectively gives borderless windowed mode at the requested resolution.
+force_borderless=1
+
+; Intercept ChangeDisplaySettingsA and pretend it succeeded WITHOUT actually
+; changing the display mode. Combined with force_borderless, this keeps the
+; desktop intact while Sacred thinks it's in fullscreen.
+swallow_displaymode=1
+
+; Window pixel size. 0 = keep Sacred's requested values (i.e. whatever it pulls
+; from Settings.cfg).  Common targets:
+;   1920 x 1080   FHD desktop
+;   2560 x 1440   QHD
+;   3840 x 2160   4K (Sacred wasn't designed for this; UI gets tiny)
+force_width=1920
+force_height=1080
+
+; True fullscreen, full scale: ignore force_width/height and make the
+; borderless window cover the ENTIRE primary monitor at desktop
+; resolution from (0,0). The DDraw HD-stretch then scales Sacred's
+; internal 800x600 frame to fill the whole screen. Recommended for a
+; clean "looks fullscreen" result with borderless's alt-tab friendliness.
+force_fullscreen=1
+
+; ReBorn-style TRUE HD. Rewrites the DirectDraw back-buffer + display
+; mode to force_width x force_height so Sacred RENDERS at that resolution
+; (not stretched 800x600). Requires force_width/force_height set above.
+; This is the real fullscreen/full-scale path (ReBorn HD method).
+enable_hd=1

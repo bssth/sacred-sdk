@@ -1,0 +1,80 @@
+name: Release
+
+# Push a tag, get a release:
+#
+#     git tag v0.2.0 && git push origin v0.2.0
+#
+# The archive is what a player extracts into their Sacred Gold folder, then
+# double-clicks install.cmd. It contains no game files: the Intel JPEG library
+# stays theirs (install.cmd only renames it) and the decompiled vanilla scripts
+# are not shipped.
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (e.g. v0.2.0-test); no release is published'
+        required: true
+        default: 'v0.0.0-manual'
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Work out the version
+        id: ver
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build (Release | Win32)
+        run: msbuild SacredSDK.vcxproj -p:Configuration=Release -p:Platform=Win32 -m -v:minimal
+
+      - name: Smoke-test the artefact
+        run: python packaging/check_dll.py Release/ijl15.dll
+
+      # The documentation lives in the GitHub wiki repository. It is a submodule
+      # here over SSH, which a runner cannot use, so clone it over HTTPS instead.
+      # A failure is not fatal: the archive then ships without sdk/docs.
+      - name: Fetch the wiki pages
+        continue-on-error: true
+        run: git clone --depth 1 https://github.com/${{ github.repository }}.wiki.git wiki-docs
+
+      - name: Package
+        id: pack
+        run: python packaging/make_release.py --version ${{ steps.ver.outputs.version }} --dll Release/ijl15.dll --docs wiki-docs
+
+      - name: Upload the archive as a build artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SacredSDK-${{ steps.ver.outputs.version }}
+          path: dist/*.zip
+          if-no-files-found: error
+
+      - name: Publish the release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          name: SacredSDK ${{ steps.ver.outputs.version }}
+          files: dist/*.zip
+          generate_release_notes: true
+          body: |
+            **Install:** extract everything into your Sacred Gold folder (the one with `Sacred.exe`), then run `install.cmd`.
+            It renames the game's own `ijl15.dll` to `ijl15_real.dll` and puts the SDK proxy in its place. `uninstall.cmd` undoes it.
+
+            Your own mods go in `custom\lua\`; the framework lives in `sdk\custom\lua\` and anything you put at the same path under `custom\lua\` wins over it.
+
+            Verified on Sacred Gold build 2.0.2.28 (2006-10-13), Steam and GOG.

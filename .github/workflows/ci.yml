@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  dll:
+    name: Build the DLL
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build (Release | Win32)
+        run: msbuild SacredSDK.vcxproj -p:Configuration=Release -p:Platform=Win32 -m -v:minimal
+
+      # Sacred loads us through the ijl15.dll proxy slot. If the six ijl*
+      # exports stop forwarding to ijl15_real, the game will not start -- that
+      # is what this checks, and it needs no game files.
+      - name: Smoke-test the artefact
+        run: python packaging/check_dll.py Release/ijl15.dll
+
+      - name: Upload the DLL
+        uses: actions/upload-artifact@v4
+        with:
+          name: ijl15-dll-${{ github.sha }}
+          path: Release/ijl15.dll
+          if-no-files-found: error
+
+  lua:
+    name: Lua syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Lua 5.4
+        run: sudo apt-get update && sudo apt-get install -y lua5.4
+
+      # The SDK embeds Lua 5.4; every file it ships has to parse under it.
+      - name: Check the framework tree
+        run: python3 packaging/check_lua.py custom/lua
+
+  funkcode:
+    name: FunkCode round-trip
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Round-trips synthetic streams covering every operand form, plus the
+      # exact record shapes the Lua builders emit, and asserts that the DLL's
+      # opcode table (lua_bake_opcodes.inc) still matches the Python one.
+      # The full corpus test needs a Sacred install and stays a local run:
+      #   python re/py/funkcode_roundtrip_test.py
+      - name: Self-test the (de)compiler pair
+        run: python re/py/funkcode_selftest.py

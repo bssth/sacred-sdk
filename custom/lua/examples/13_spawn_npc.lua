@@ -1,0 +1,35 @@
+-- examples/13_spawn_npc.lua — spawning NPCs via the engine CreateNPC path.
+--
+-- `require "npcspawn"` builds real `tag 0x01 CreateNPC` records (the same
+-- ones vanilla scripts use). Append them to the record list your class
+-- mod returns; they bake into FunkCode.bin — no DLL rebuild.
+--
+-- Real usage (inside custom/lua/bin/TYPE_NPC_<CLASS>/FunkCode.lua):
+--
+--   local v   = require "vanilla"
+--   local spn = require "npcspawn"
+--   local NPC = require "npc"
+--   local recs = v.load "bin/TYPE_NPC_<CLASS>/FunkCode"
+--
+--   -- friendly creature at the hero
+--   spn.add(recs, { type = NPC.UNICORN, pos = "CPOS:HERO",
+--                   name = "my_pet", side = "ally" })
+--
+--   -- hostile pack member at a named DefPos, level 25, stationary guard
+--   spn.add(recs, { type = NPC.ORC_WARRIOR, pos = "pos_xx01",
+--                   side = "enemy", level = 25, stationary = true })
+--
+--   -- a quest NPC: give it a unique name, then reference that name from
+--   -- a DialogShow + quest record (see npc_model.md "Quest-NPC binding")
+--   spn.add(recs, { type = NPC.MERCHANT, pos = "CPOS:HERO",
+--                   name = "elder_marvin", side = "neutral" })
+--
+--   return recs
+--
+-- opts: type (required, see npc.lua) | pos ("CPOS:HERO" | DefPos key |
+--   "CPOS:RES:<r>" | numeric vx)  | name | sub_id | level | group |
+--   scale | stationary | invulnerable | side ("ally"|"neutral"|"enemy")
+--   | awake (default true)
+--
+-- This example is illustrative only (returns no records).
+return {}
