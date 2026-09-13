@@ -1,7 +1,7 @@
 # SacredSDK
 
-A modern modding toolkit for **Sacred Gold** (Ascaron, 2004) — write
-mods in **Lua** without ever modifying the original game files.
+A modding toolkit for **Sacred Gold** (Ascaron, 2004) — write mods in **Lua**
+without modifying a single original game file.
 
 [![Verified](https://img.shields.io/badge/verified-Steam%20build%202.0.2.28%20%282006--10--13%29-brightgreen)]()
 [![License](https://img.shields.io/badge/license-MIT-blue)]()
@@ -14,200 +14,171 @@ mods in **Lua** without ever modifying the original game files.
 
 ## What is it
 
-SacredSDK is a DLL that Sacred loads at startup (via the `ijl15.dll`
-proxy slot — no patching of `Sacred.exe`). On load it:
+SacredSDK is a DLL that Sacred loads at startup through the `ijl15.dll` proxy
+slot — no patching of `Sacred.exe`, no edits to the game's data. Once it is up
+it gives you three things:
 
-1. **Bakes Lua mods** at `custom/lua/**/*.lua` (yours) and
-   `sdk/custom/lua/**/*.lua` (the framework, yours wins) into Sacred's native
-   bytecode (the `FunkCode.bin` format used by every quest, dialog,
-   and creature in the game).
-2. **Patches resource lookups** so any file Sacred opens can be
-   transparently swapped for `custom/<same-path>`.
-3. **Hooks the resource resolver** so Lua mods can react to game-time
-   events (NPC dialog, kill banners, quest progress) and mutate hero
-   state (gold, inventory).
+1. **A Lua layer over the engine's own script format.** Your `.lua` files are
+   compiled to the bytecode Sacred already speaks (`FunkCode.bin`) and served to
+   the engine in place of the originals.
+2. **A runtime**, so a mod can spawn NPCs, open dialogs, register quests, watch
+   for kills, react to the hero walking somewhere — while the game runs.
+3. **The engine's own verbs**, one Lua builder per script record, copied from
+   records the shipped quests use. When your mod pays gold, moves an NPC, writes
+   a journal line or closes a road, *the engine does it*, with its own sounds,
+   its own popups and its own savegame.
 
-The Steam install stays bit-for-bit untouched — mods live entirely
-under `<game>/custom/`. Uninstall = delete that directory.
-
----
-
-## What you can do today
-
-| Capability | Status | Notes |
-|---|---|---|
-| **Reskin any vanilla quest's text** | ✅ stable | `T.named("HQ_3_2_1_Log_Title", "My new title")` |
-| **Inline-string mods** | ✅ stable | `T"Some text"` auto-registers in `global.res` |
-| **Per-class boot scripts** | ✅ stable | qbits, variables at hero spawn |
-| **Dialog scenes from Lua** | ✅ stable | `d.trigger / d.line / d.emit` builders |
-| **Native `has_item` predicate** | ✅ stable | bytecode-level inventory check |
-| **Native `give_gold` opcode** | ✅ stable | bake-time gold ops |
-| **Runtime callbacks** (`sacred.on_trigger`) | ✅ working | fires on resource queries |
-| **`ctx:give_gold(N)`** in handlers | ✅ working | event-bus, plays coin sound + floating text |
-| **`ctx:has_item(N)`** (equipment) | ✅ working | scans 18 wear slots |
-| **`ctx:notify(text)`** | ✅ working | top-of-screen toast banner |
-| **In-game overlay** | ✅ working | F11 capture / F12 hide / F10 snapshot |
-| `ctx:has_item` (backpack) | 🟡 TODO | needs bag-array RE |
-| `ctx:set_qbit` runtime | 🟡 stub | bake-time works |
-| Native engine banner | 🟡 TODO | currently ImGui overlay toast |
-| Brand-new quest at spawn | ❌ blocked | needs quest-book RE |
-
-See [docs/community-refs.md](docs/community-refs.md) for the full
-wishlist with effort estimates.
+The install stays bit-for-bit untouched: Steam's "Verify integrity" stays green,
+and uninstalling is renaming one DLL back.
 
 ---
 
-## Quick start
+## Install
+
+**From a release:** extract the archive into your Sacred Gold folder and run
+`install.cmd`. It renames the game's own `ijl15.dll` to `ijl15_real.dll` and puts
+the SDK proxy in its place; `uninstall.cmd` puts it back. Nothing else changes.
+
+**From source:** build `SacredSDK.vcxproj` (Release | Win32, VS 2022 / v143),
+then from the game root:
+
+```cmd
+copy ijl15.dll ijl15_real.dll        :: once: keep the original
+copy sdk\Release\ijl15.dll ijl15.dll
+```
+
+---
+
+## Your first mod
 
 ```lua
--- save as: <game>/custom/lua/bin/TYPE_NPC_SERAPHIM/FunkCode.lua
-local T = require "text"
-local v = require "vanilla"
+-- save as: <game>/custom/lua/bin/TYPE_NPC_GLADIATOR/FunkCode.lua
+local T    = require "text"
+local NPCo = require "npcobj"
+local V    = require "vars"
+local S    = require "sections"
 
--- Re-skin the Seraphim main quest into a custom narrative.
-T.named("HQ_3_2_1_Log_Title",  "The Lost Tome of Ancaria")
-T.named("HQ_3_2_1_Log_Header", "Chapter 1 — A Curious Heist")
-T.named("HQ_3_2_1_Log_Qstart",
-  "A young monk runs up to you in Bellevue, breathless. " ..
-  "An ancient tome was stolen from the monastery library...")
+T.named("KOLB_OFFER", "Brigands took the mill. Clear them out and I will pay.")
 
-return v.load "bin/TYPE_NPC_SERAPHIM/FunkCode"
+V.on_ready(function()                         -- the world is up (new game or save)
+  local o = NPCo.spawn_template("quest_npc", { type = 257, pos = "CPOS:HERO" })
+  if not o then return end
+  o:teleport(2793, 2284)
+  o:bind_quest("Sergeant Kolb", true)         -- a real dialog entry + the "!" marker
+  o:dialog{
+    text = "KOLB_OFFER",
+    buttons = { { label = S.ACCEPT, on = function() require("reward").give_gold(500) end },
+                { label = S.REJECT } },
+  }
+end)
+
+return {}
 ```
 
-Launch Sacred → start a new Seraphim → accept Leandra's quest → open
-the journal. You'll see your new title and text where vanilla had
-"River Pirates".
+Start Sacred and walk up to him. No bytecode, no offsets, no patched files.
 
-The full reference is in **[docs/MODDING_GUIDE.md](docs/MODDING_GUIDE.md)** —
-read that first.
+Ready-made recipes for the usual questions — renaming an NPC, changing a reward,
+reacting to a kill, closing a road — are in **[MODDING_COOKBOOK.md](MODDING_COOKBOOK.md)**.
 
 ---
 
-## Anatomy
+## What it can do
 
-```
-<Sacred Gold install>/
-├── ijl15.dll               ← SacredSDK proxy (replaces stock)
-├── ijl15_real.dll          ← original, renamed
-├── bin/, scripts/, …       ← vanilla, never touched
-└── custom/
-    ├── lua/
-    │   ├── lib/            ← stdlib (quest / dialog / text / events / …)
-    │   ├── examples/       ← copy-paste starters (01..07)
-    │   └── bin/            ← YOUR mods live here, mirror of bin/
-    │       └── TYPE_NPC_*/
-    │           ├── QuestCode.lua
-    │           └── FunkCode.lua
-    └── bin/                ← auto-generated .bin files (served to Sacred)
-```
+Everything below has been watched working in game, not inferred from a
+disassembly.
 
-There are three authoring layers (high → low):
-
-1. **High level** — `lib/quest.lua`, `lib/dialog.lua`, `lib/text.lua`.
-   One Lua line per quest primitive.
-2. **Mid level** — `lib/funkcode.lua`, `lib/raw.lua`. Direct bytecode
-   builders by opcode name.
-3. **Low level** — `lib/unsafe.lua`, `raw.hex"…"`. Raw byte literals.
-
-Round-trip is byte-perfect for 132/132 vanilla `.bin` files.
-
----
-
-## Examples (in `custom/lua/examples/`)
-
-| File | Demonstrates |
+| | |
 |---|---|
-| `01_hello.lua` | minimal mod that declares state |
-| `02_text_swap.lua` | bulk-rewrite vanilla via `gsub` |
-| `03_dialog_block.lua` | author a dialog scene from scratch |
-| `04_full_quest.lua` | small standalone quest |
-| `05_conditional_dialog.lua` | native Sacred branching skeleton |
-| `06_sidequest.lua` | **start here** — full side-quest template |
-| `07_runtime_triggers.lua` | `sacred.on_trigger` patterns |
+| **Quests** | Real entries in the engine's quest registry: SetUpQuest / TriggerQuest / ExitQuest drive them, and the engine writes the journal, the category, the compass column and the fanfares itself. Objectives use its own kill and pickup counters, which count, display "3 of 5" and survive a save. |
+| **Dialog** | Your own nodes on your own NPCs: your text, up to four answer buttons, each button a Lua function. Quest markers over their heads, node switching, popups with no NPC at all. |
+| **NPCs** | Spawn from templates (guard, merchant, smith, trainer, enemy, companion…), name them, level them, equip them, make them follow, fight, walk somewhere, play an animation, faint and get back up. A `persona` keeps a character — the same handle, the same name — across savegames and chapters. |
+| **The world** | Chests with loot, clickable objects, map icons, item drops, particle marks, barriers that close a road, and rectangles on the ground that run your code when the hero walks in. |
+| **Text** | New strings written into `global.res` at bake time, dialog lines swapped by name, the game's own on-screen banners. |
+| **Vanilla scripts** | `sacred.disasm` decompiles a shipped `.bin` on the spot — 125,236 records out of 3.97 MB in 721 ms — so a mod can rewrite the game's own quests and bake them back byte-exactly, with nothing to prepare. |
+| **Cut scenes** | Cinema mode, queued walks and animations, camera focus. |
+| **State** | Engine variables, hero quest bits, and a savegame hook — a mod's progress is in the player's save, not in a sidecar file. |
+
+The reference is the **[wiki](../../wiki)**: Installation, Writing Your First
+Mod, Native Quests, Runtime NPCs, Dialog, Vanilla Verbs, World Objects, Zones and
+Barriers, Cut Scenes, the Lua API.
 
 ---
 
-## Project status
+## How the mod tree is laid out
 
-**Alpha.** Core pipeline (Lua → bake → byte-identical bytecode) is
-proven and stable. Runtime hooks are working but require knowing
-which resource ids Sacred queries during your event of interest
-(discovery is iterative; see `docs/MODDING_GUIDE.md` § "Runtime
-trigger hooks").
+Two trees, and the player's wins:
 
-Public surface is **`docs/MODDING_GUIDE.md`** and the `custom/lua/lib/`
-modules. The C++ side (DLL implementation, hooks, RE scripts) is in
-the same SCM repository but separately gated — see § "Repository
-contents" below.
+```
+<Sacred Gold>/
+├── ijl15.dll               ← the SDK proxy
+├── ijl15_real.dll          ← the game's original, renamed
+├── bin/, scripts/, …       ← vanilla, never touched
+├── sdk/custom/lua/         ← THE FRAMEWORK (ships with the SDK)
+│   ├── lib/                ← the standard library
+│   └── examples/           ← copy-paste starters
+└── custom/                 ← YOURS
+    ├── lua/bin/…           ← your mods, mirroring the game's bin/
+    ├── lua/lib/…           ← optional: your copy of a framework module
+    ├── bin/                ← generated by the bake, served to the engine
+    └── scripts/            ← generated (global.res with your new strings)
+```
+
+A file at `custom/lua/<path>` beats the one at `sdk/custom/lua/<path>` — mod for
+mod, module for module. Baked output always lands in `custom/`, so updating the
+SDK never touches your work.
 
 ---
 
-## Repository contents
+## Repository
 
 ```
 sdk/
-├── README.md               ← you are here
-├── docs/
-│   ├── MODDING_GUIDE.md    ← READ THIS FIRST
-│   ├── README.md           ← guide to the rest of the doc set
-│   ├── 01..22-*.md         ← RE journey (historical, technical)
-│   ├── community-refs.md   ← mined intel from community RE tools
-│   └── roadmap.md          ← where we are, where we're going
-└── tools/
-    ├── README.md           ← walkthrough: "I want to X → run Y"
-    ├── *.py                ← FunkCode pipeline, globalres edits, quest
-    │                          dumpers, sacred_hash, balance_diff, …
-    ├── hash_names.csv      ← 23 123-entry hash dictionary
-    ├── smoke_test_proxy.bat
-    └── ghidra/             ← Java scripts for headless Ghidra RE
-        └── README.md
+├── *.cpp, *.inc, engine/, hooks/, ports/   the DLL
+├── lua/                                    embedded Lua 5.4
+├── custom/                                 the Lua framework that ships with it
+├── packaging/                              install.cmd, release packaging, CI checks
+├── re/py/                                  the FunkCode pipeline and RE tooling
+├── wiki/                                   the documentation (submodule)
+├── MODDING_GUIDE.md                        the model, end to end
+└── MODDING_COOKBOOK.md                     "how do I ..." recipes
 ```
 
-The **DLL sources** (C++) and the **Lua stdlib bundled into the DLL**
-ship in a separate distribution channel (binary release) and will be
-opened in a later push when the public API surface stabilises.
-
-If you just want to run mods today, the binary release ships with all
-the runtime bits pre-built — clone this repo only if you want to
-read, contribute to, or extend the documentation and the Python
-tooling.
+CI builds the DLL on every push, smoke-tests its exports, parses every Lua file
+the SDK ships, and round-trips the FunkCode (de)compiler against a synthetic
+corpus plus the DLL's own opcode table. A tag starting with `v` builds the
+release archive and publishes it.
 
 ---
 
 ## Verified on
 
-Steam Sacred Gold, build **2.0.2.28** (2006-10-13). The DLL doesn't
-do version detection; other builds may work but have not been
-tested. If you try one, please open an issue.
+Steam Sacred Gold, build **2.0.2.28** (2006-10-13); the GOG build of the same
+version is byte-identical where it matters. The DLL checks the build it attached
+to and says so in `sdk/logs/sdk_loaded.log`.
 
 ---
 
 ## Non-goals
 
-- Multiplayer mod scripting (Sacred LAN protocol RE is on the
-  wishlist but not started).
-- Asset replacement (textures, models, sounds) — these are in
-  `.pak`/Granny formats; see `docs/community-refs.md` for the
-  community tools that handle them.
-- "ReBorn HD"-style EXE patching — SacredSDK is a runtime DLL only,
-  not a patch.
+- Multiplayer mod scripting (the LAN protocol is understood in part, but nothing
+  is built on it).
+- Asset replacement (textures, models, sounds) — those are `.pak` / Granny
+  formats; community tools handle them.
+- EXE patching in the "ReBorn HD" sense. SacredSDK is a runtime DLL.
 
 ---
 
 ## Acknowledgements
 
-- **Thorium** (2007 unofficial patch 2.29) — recovered global.res
-  loader detour and focus-busy-wait fix that we ported to runtime.
-- **SonicMouse** (SacredGameTools) — save-file format,
-  `TINCAT2.DLL` networking layout.
-- **The Resacred remake project** — pak/keyx format reverse
-  engineering, item/tile structs.
-- The broader Sacred modding community for two decades of
-  reverse-engineering notes.
+- **Thorium** (2007 unofficial patch 2.29) — the `global.res` loader detour and
+  the focus busy-wait fix, both ported to runtime here.
+- **SonicMouse** (SacredGameTools) — save-file format, `TINCAT2.DLL` layout.
+- **The Resacred remake project** — pak/keyx formats, item and tile structs.
+- The broader Sacred modding community, for two decades of notes.
 
 ---
 
 ## License
 
-MIT. See `LICENSE` (or fall back to standard MIT terms — this is
-strictly fan modding work; no Ascaron/Encore IP is redistributed).
+MIT, see [LICENSE](LICENSE). This is fan modding work: no Ascaron / Encore code
+or content is redistributed here or in the release archive.
