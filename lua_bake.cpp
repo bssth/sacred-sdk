@@ -298,6 +298,279 @@ static bool assemble_op_from_stack(lua_State* L, const OpInfo* info,
     }
 }
 
+// --- decoder: bytes -> the record tables the baker eats --------------------
+//
+// The exact inverse of assemble_op_from_stack, row for row, so that
+// `sacred.disasm(bytes)` hands a mod the same structure a pre-decompiled
+// snapshot would have (`{ tag, flags, {LABEL, args...}, ... }`) and the mod can
+// return it straight back to be baked. That is what lets `vanilla.load` work
+// out of the box, with no snapshot files anywhere.
+//
+// Two rules keep it honest:
+//   * every record is VERIFIED by re-encoding it with the encoder above and
+//     comparing bytes. A record the vocabulary cannot spell exactly comes back
+//     as `{tag, flags, {"_HEX", "<payload>"}}`, which bakes back byte-identical.
+//   * the opcode table is the same OP_TABLE the encoder uses, so decode and
+//     encode can never drift apart.
+
+static const OpInfo* g_op_by_code[256];
+static bool g_op_by_code_ready = false;
+static void ensure_op_index() {
+    if (g_op_by_code_ready) return;
+    for (int i = 0; i < 256; i++) g_op_by_code[i] = nullptr;
+    // First row wins: a few labels share an opcode, and the re-encode check
+    // decides whether the choice was right for this record.
+    for (int i = 0; i < OP_TABLE_N; i++) {
+        uint8_t c = OP_TABLE[i].opcode;
+        if (!g_op_by_code[c]) g_op_by_code[c] = &OP_TABLE[i];
+    }
+    g_op_by_code_ready = true;
+}
+
+static uint32_t le32_at(const uint8_t* p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+// Read an ASCIIZ starting at ip. False when it runs off the end.
+static bool read_cstr_at(const uint8_t* p, size_t n, size_t& ip, const char*& out, size_t& len) {
+    size_t start = ip;
+    while (ip < n && p[ip] != 0) ip++;
+    if (ip >= n) return false;
+    out = (const char*)p + start;
+    len = ip - start;
+    ip++;                                   // the terminator
+    return true;
+}
+
+// Decode one op at p[ip] and push { LABEL, args... }. On failure nothing is
+// left on the stack and ip is unchanged.
+static bool decode_op_to_lua(lua_State* L, const uint8_t* p, size_t n, size_t& ip) {
+    ensure_op_index();
+    const OpInfo* info = g_op_by_code[p[ip]];
+    if (!info) return false;
+    size_t save = ip;
+    ip++;
+    lua_newtable(L);
+    int t = lua_gettop(L);
+    lua_pushstring(L, info->label);
+    lua_rawseti(L, t, 1);
+    int slot = 2;
+    bool ok = true;
+
+    switch (info->kind) {
+    case KIND_STACK:
+    case KIND_HALT:
+        break;
+    case KIND_CONST: {
+        int w = info->width;
+        if (w == 0) break;
+        if (w == 3) {
+            if (ip + 3 > n) { ok = false; break; }
+            lua_pushlstring(L, (const char*)p + ip, 3);
+            lua_rawseti(L, t, slot++);
+            ip += 3;
+            break;
+        }
+        if (w == 1) {
+            if (ip + 1 > n) { ok = false; break; }
+            lua_pushinteger(L, (lua_Integer)p[ip]);
+            lua_rawseti(L, t, slot++);
+            ip += 1;
+            break;
+        }
+        if (w == 2) {
+            if (ip + 2 > n) { ok = false; break; }
+            lua_pushinteger(L, (lua_Integer)((uint32_t)p[ip] | ((uint32_t)p[ip + 1] << 8)));
+            lua_rawseti(L, t, slot++);
+            ip += 2;
+            break;
+        }
+        int cnt = (w == 4) ? 1 : (w == 8) ? 2 : (w == 12) ? 3 : (w == 16) ? 4 : 0;
+        if (cnt == 0 || ip + 4 * (size_t)cnt > n) { ok = false; break; }
+        for (int k = 0; k < cnt; k++) {
+            lua_pushinteger(L, (lua_Integer)le32_at(p + ip));
+            lua_rawseti(L, t, slot++);
+            ip += 4;
+        }
+        break;
+    }
+    case KIND_CSTR1:
+    case KIND_CSTR2: {
+        int cnt = (info->kind == KIND_CSTR1) ? 1 : 2;
+        for (int k = 0; k < cnt && ok; k++) {
+            const char* sp; size_t sl;
+            if (!read_cstr_at(p, n, ip, sp, sl)) { ok = false; break; }
+            lua_pushlstring(L, sp, sl);
+            lua_rawseti(L, t, slot++);
+        }
+        break;
+    }
+    case KIND_CSTR1_1:
+    case KIND_CSTR1_5: {
+        size_t tail = (info->kind == KIND_CSTR1_1) ? 1 : 5;
+        const char* sp; size_t sl;
+        if (!read_cstr_at(p, n, ip, sp, sl)) { ok = false; break; }
+        lua_pushlstring(L, sp, sl);
+        lua_rawseti(L, t, slot++);
+        if (ip + tail > n) { ok = false; break; }
+        lua_pushlstring(L, (const char*)p + ip, tail);
+        lua_rawseti(L, t, slot++);
+        ip += tail;
+        break;
+    }
+    case KIND_U32_CSTR1:
+    case KIND_U32_CSTR2: {
+        if (ip + 4 > n) { ok = false; break; }
+        lua_pushinteger(L, (lua_Integer)le32_at(p + ip));
+        lua_rawseti(L, t, slot++);
+        ip += 4;
+        int cnt = (info->kind == KIND_U32_CSTR1) ? 1 : 2;
+        for (int k = 0; k < cnt && ok; k++) {
+            const char* sp; size_t sl;
+            if (!read_cstr_at(p, n, ip, sp, sl)) { ok = false; break; }
+            lua_pushlstring(L, sp, sl);
+            lua_rawseti(L, t, slot++);
+        }
+        break;
+    }
+    default:
+        ok = false;
+        break;
+    }
+
+    if (!ok) {
+        lua_settop(L, t - 1);
+        ip = save;
+        return false;
+    }
+    return true;
+}
+
+static void push_hex_record(lua_State* L, uint8_t tag, const uint8_t* payload, size_t plen) {
+    static const char* HEX = "0123456789abcdef";
+    lua_newtable(L);
+    int rec = lua_gettop(L);
+    lua_pushinteger(L, (lua_Integer)tag);
+    lua_rawseti(L, rec, 1);
+    lua_pushinteger(L, (lua_Integer)(plen ? payload[0] : 0));
+    lua_rawseti(L, rec, 2);
+    lua_newtable(L);
+    lua_pushstring(L, "_HEX");
+    lua_rawseti(L, -2, 1);
+    std::string hex;
+    if (plen > 1) {
+        hex.reserve((plen - 1) * 2);
+        for (size_t i = 1; i < plen; i++) {
+            hex.push_back(HEX[payload[i] >> 4]);
+            hex.push_back(HEX[payload[i] & 0xF]);
+        }
+    }
+    lua_pushlstring(L, hex.data(), hex.size());
+    lua_rawseti(L, -2, 2);
+    lua_rawseti(L, rec, 3);
+}
+
+// Push one record table for `payload` (which starts with the flags byte).
+// Returns true when it was spelled in mnemonics, false when it came back as
+// _HEX. Either way exactly one table is left on the stack.
+static bool push_record(lua_State* L, uint8_t tag, const uint8_t* payload, size_t plen) {
+    if (plen == 0) {                       // no flags byte: nothing to spell
+        push_hex_record(L, tag, payload, plen);
+        return false;
+    }
+    lua_newtable(L);
+    int rec = lua_gettop(L);
+    lua_pushinteger(L, (lua_Integer)tag);
+    lua_rawseti(L, rec, 1);
+    lua_pushinteger(L, (lua_Integer)payload[0]);
+    lua_rawseti(L, rec, 2);
+
+    bool ok = true;
+    int slot = 3;
+    size_t ip = 1;
+    while (ip < plen) {
+        if (!decode_op_to_lua(L, payload, plen, ip)) { ok = false; break; }
+        lua_rawseti(L, rec, slot++);
+    }
+
+    // Verify: assemble what we just built and demand the same bytes back.
+    if (ok) {
+        ensure_label_map();
+        std::string check;
+        check.push_back((char)payload[0]);
+        for (int j = 3; j < slot && ok; j++) {
+            lua_rawgeti(L, rec, j);
+            int op_idx = lua_gettop(L);
+            lua_rawgeti(L, op_idx, 1);
+            const char* label = lua_tostring(L, -1);
+            auto it = g_label_map.find(label ? label : "");
+            lua_pop(L, 1);
+            char op_err[256];
+            if (it == g_label_map.end() ||
+                !assemble_op_from_stack(L, it->second, op_idx,
+                                        (int)lua_rawlen(L, op_idx), check, op_err)) {
+                ok = false;
+            }
+            lua_pop(L, 1);
+        }
+        if (ok && (check.size() != plen || memcmp(check.data(), payload, plen) != 0)) ok = false;
+    }
+
+    if (!ok) {
+        lua_settop(L, rec - 1);
+        push_hex_record(L, tag, payload, plen);
+        return false;
+    }
+    return true;
+}
+
+// sacred.disasm(bytes) -> records, stats
+//
+// `bytes` is a whole FunkCode/QuestCode/StartCode blob, as sacred.read_file
+// returns it. The result is the table the baker consumes, so:
+//
+//   local raw  = sacred.read_file("bin/TYPE_NPC_SERAPHIM/FunkCode.bin")
+//   local recs = sacred.disasm(raw)          -- no snapshot file needed
+//   ...                                       -- rewrite what you like
+//   return recs
+//
+// stats = { records = N, mnemonic = N, hex = N, bytes = N }.
+static int l_sacred_disasm(lua_State* L) {
+    size_t n = 0;
+    const char* data = luaL_checklstring(L, 1, &n);
+    const uint8_t* b = (const uint8_t*)data;
+
+    lua_newtable(L);
+    int arr = lua_gettop(L);
+    int count = 0, mnem = 0, hex = 0;
+    size_t off = 0;
+    while (off + 3 <= n) {
+        uint8_t tag = b[off];
+        size_t size = ((size_t)b[off + 1] << 8) | (size_t)b[off + 2];
+        if (size < 3 || off + size > n) {
+            return luaL_error(L, "sacred.disasm: bad record at offset %d (tag 0x%02x, size %d)",
+                              (int)off, (int)tag, (int)size);
+        }
+        if (!lua_checkstack(L, 8)) return luaL_error(L, "sacred.disasm: out of Lua stack");
+        if (push_record(L, tag, b + off + 3, size - 3)) mnem++; else hex++;
+        lua_rawseti(L, arr, ++count);
+        off += size;
+    }
+    if (off != n) {
+        return luaL_error(L, "sacred.disasm: %d trailing byte(s) after the last record",
+                          (int)(n - off));
+    }
+    sdk_log("[lua_bake] sacred.disasm: %d records (%d mnemonic, %d hex) from %d bytes",
+            count, mnem, hex, (int)n);
+
+    lua_newtable(L);
+    lua_pushinteger(L, count);  lua_setfield(L, -2, "records");
+    lua_pushinteger(L, mnem);   lua_setfield(L, -2, "mnemonic");
+    lua_pushinteger(L, hex);    lua_setfield(L, -2, "hex");
+    lua_pushinteger(L, (lua_Integer)n); lua_setfield(L, -2, "bytes");
+    return 2;
+}
+
 // --- main bake: take the table on top of stack, produce .bin bytes --------
 static bool table_to_bytes(lua_State* L, std::string& out, char err[256]) {
     if (lua_type(L, -1) != LUA_TTABLE) {
@@ -549,6 +822,7 @@ static void register_sacred_api(lua_State* L) {
     lua_pushcfunction(L, l_sacred_log);        lua_setfield(L, -2, "log");
     lua_pushcfunction(L, l_sacred_read_file);  lua_setfield(L, -2, "read_file");
     lua_pushcfunction(L, l_sacred_write_file); lua_setfield(L, -2, "write_file");
+    lua_pushcfunction(L, l_sacred_disasm);     lua_setfield(L, -2, "disasm");
     lua_setglobal(L, "sacred");
 
     // Extend the `sacred` table with runtime-trigger entries

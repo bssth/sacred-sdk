@@ -9,27 +9,29 @@
 --   v.gsub_strings(recs, "_sera_", "_glad_")
 --   return recs                          -- baker writes custom/bin/.../FunkCode.bin
 --
--- `load(rel)` looks for a pre-decompiled snapshot of that .bin, in both trees,
--- the player's first:
---   <game>/custom/lua/_vanilla/<rel>.lua
---   <game>/sdk/custom/lua/_vanilla/<rel>.lua
+-- `load(rel)` gets those records from the first source that has them:
 --
--- THE SNAPSHOTS ARE NOT SHIPPED. They are the game's own scripts in another
--- form -- tens of megabytes of decompiled Ascaron content -- so the SDK neither
--- redistributes them nor puts them in its repository. Make the one you need from
--- your own install, once:
+--   1. THE GAME'S OWN .bin, decompiled on the spot by `sacred.disasm`
+--      (sdk/lua_bake.cpp) -- nothing to prepare, nothing to download. This is
+--      the normal path: the bytes come from the player's own install.
+--   2. a pre-decompiled snapshot, if one is lying about:
+--        <game>/custom/lua/_vanilla/<rel>.lua      (the player's)
+--        <game>/sdk/custom/lua/_vanilla/<rel>.lua  (the SDK's)
+--      Snapshots are useful when you have hand-edited one, or when you want to
+--      read the script as text. They are NOT shipped: they are the game's own
+--      content in another form. Make one with
+--        python sdk/re/py/funkcode_decompile_lua.py bin/<X>/FunkCode.bin \
+--               -o custom/lua/_vanilla/bin/<X>/FunkCode.lua
+--      and `load` will prefer it, so an edited snapshot always wins.
 --
---   python sdk/re/py/funkcode_decompile_lua.py bin/TYPE_NPC_SERAPHIM/FunkCode.bin \
---          -o custom/lua/_vanilla/bin/TYPE_NPC_SERAPHIM/FunkCode.lua
+-- `sacred.disasm` is the exact inverse of the baker's encoder and verifies every
+-- record by re-encoding it, so what you get back bakes to the same bytes unless
+-- you change something. A record the mnemonic vocabulary cannot spell comes
+-- back as `{"_HEX", "..."}` -- `gsub_bytes` reaches inside those too.
 --
--- Everything else in the SDK works without them: `require "vanilla"` itself, and
--- every runtime library (npcobj, zones, nativequest, verbs...). Only `v.load`,
--- which rewrites a whole shipped script at bake time, needs a snapshot.
--- `v.have(rel)` says whether one is there, so a mod can degrade politely.
---
--- A future revision will decompile on-the-fly via a C-side `sacred.disasm`
--- helper, eliminating the need to pre-bake snapshots. For now the snapshot
--- file is the source of truth.
+-- Everything else in the SDK needs none of this: `require "vanilla"` itself, and
+-- every runtime library (npcobj, zones, nativequest, verbs...). Only `v.load`
+-- reads a shipped script at all.
 
 local M = {}
 
@@ -58,28 +60,58 @@ local function _try(path)
   return loadfile(path)                 -- outside the game (offline tests)
 end
 
--- Is a snapshot of `rel` available? Lets a mod fall back instead of failing the
--- whole bake.
+-- The game's own file for `rel`, e.g. "bin\\TYPE_NPC_SERAPHIM\\FunkCode.bin".
+local function _bin_path(rel)
+  rel = (rel or ""):gsub("/", "\\"):gsub("^\\+", ""):gsub("%.lua$", ""):gsub("%.bin$", "")
+  return rel .. ".bin"
+end
+
+-- Can `load(rel)` produce records at all -- from a snapshot or from the game's
+-- own .bin? Lets a mod fall back instead of failing the whole bake.
 function M.have(rel)
   for _, p in ipairs(_vanilla_paths(rel)) do
     if _try(p) then return true, p end
   end
+  local bin = _bin_path(rel)
+  if sacred and sacred.disasm and sacred.read_file and sacred.read_file(bin) then
+    return true, bin
+  end
   return false
 end
 
--- Read a vanilla snapshot. Returns the record table.
+-- The records of a shipped script. A hand-edited snapshot wins; otherwise the
+-- game's own .bin is decompiled on the spot.
 function M.load(rel)
   local tried = {}
   for _, p in ipairs(_vanilla_paths(rel)) do
     local chunk, err = _try(p)
-    if chunk then return chunk() end
+    if chunk then
+      if sacred and sacred.log then sacred.log("[vanilla] " .. rel .. ": snapshot " .. p) end
+      return chunk()
+    end
     tried[#tried + 1] = ("  %s  (%s)"):format(p, tostring(err))
   end
-  error(("vanilla.load: no snapshot of '%s'. Looked in:\n%s\n"
-      .. "Make one from your own install (the SDK does not ship the game's "
-      .. "scripts):\n  python sdk/re/py/funkcode_decompile_lua.py %s.bin "
-      .. "-o custom/lua/_vanilla/%s.lua")
-      :format(rel, table.concat(tried, "\n"), rel, rel))
+
+  local bin = _bin_path(rel)
+  if sacred and sacred.disasm and sacred.read_file then
+    local bytes, err = sacred.read_file(bin)
+    if bytes then
+      local recs, stats = sacred.disasm(bytes)
+      if sacred.log then
+        sacred.log(("[vanilla] %s: %d records straight from %s (%d spelled out, %d raw)")
+          :format(rel, stats.records, bin, stats.mnemonic, stats.hex))
+      end
+      return recs
+    end
+    tried[#tried + 1] = ("  %s  (%s)"):format(bin, tostring(err))
+  else
+    tried[#tried + 1] = "  sacred.disasm is missing from this SDK build"
+  end
+
+  error(("vanilla.load: nothing to load for '%s'. Tried:\n%s\n"
+      .. "Check the path -- it is relative to the game folder and without the "
+      .. "extension, e.g. \"bin/TYPE_NPC_SERAPHIM/FunkCode\".")
+      :format(rel, table.concat(tried, "\n")))
 end
 
 -- Apply `fn(record)` to every record in-place. The callback can mutate the
