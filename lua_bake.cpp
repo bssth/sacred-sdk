@@ -443,13 +443,28 @@ static bool table_to_bytes(lua_State* L, std::string& out, char err[256]) {
 }
 
 // --- file walker ----------------------------------------------------------
-// Resolve `<game>/custom/lua/` and `<game>/custom/`.
-static void resolve_dirs(char lua_dir[MAX_PATH], char custom_dir[MAX_PATH]) {
+// Mods are read from TWO trees, in priority order:
+//
+//   <game>/custom/lua        the player's own mods -- these WIN
+//   <game>/sdk/custom/lua    the framework that ships with the SDK
+//
+// A file present in both is baked from the player's tree only, so a mod can
+// replace a shipped one by putting a file at the same relative path. Bake
+// OUTPUT always goes to <game>/custom/<rel>.bin: that is the tree fs_override
+// serves to the engine, and it keeps the distributed sdk/ tree read-only.
+static void resolve_dirs(char user_lua[MAX_PATH], char sdk_lua[MAX_PATH],
+                         char out_dir[MAX_PATH]) {
     char exe[MAX_PATH] = {0};
     GetModuleFileNameA(g_attach.exe_module, exe, MAX_PATH);
     char* slash = strrchr(exe, '\\'); if (slash) *slash = 0;
-    _snprintf_s(lua_dir,    MAX_PATH, _TRUNCATE, "%s\\custom\\lua",   exe);
-    _snprintf_s(custom_dir, MAX_PATH, _TRUNCATE, "%s\\custom",        exe);
+    _snprintf_s(user_lua, MAX_PATH, _TRUNCATE, "%s\\custom\\lua",      exe);
+    _snprintf_s(sdk_lua,  MAX_PATH, _TRUNCATE, "%s\\sdk\\custom\\lua", exe);
+    _snprintf_s(out_dir,  MAX_PATH, _TRUNCATE, "%s\\custom",           exe);
+}
+
+static bool file_exists(const char* path) {
+    DWORD a = GetFileAttributesA(path);
+    return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY);
 }
 
 static void mkdirs(const char* path) {
@@ -543,21 +558,28 @@ static void register_sacred_api(lua_State* L) {
     runtime_triggers::install_lua_api(L);
 }
 
-// Override package.path / package.cpath so `require("vanilla")` etc. find
-// our libs in custom/lua/lib/ and the rest of the user's mod tree.
+// Override package.path / package.cpath so `require("vanilla")` etc. find the
+// libraries. BOTH trees are searched, the player's first, so a modder can drop
+// a patched copy of any framework module into <game>/custom/lua/lib/ and have
+// it win over the one the SDK ships.
 static void configure_package_path(lua_State* L) {
     char exe[MAX_PATH] = {0};
     GetModuleFileNameA(g_attach.exe_module, exe, MAX_PATH);
     char* slash = strrchr(exe, '\\'); if (slash) *slash = 0;
 
     lua_getglobal(L, "package");
-    // path: lib/?.lua first (our blessed helpers), then ?.lua under custom/lua/.
+    // lib/?.lua first (the blessed helpers), then ?.lua under lua/; the player's
+    // tree before the SDK's.
     lua_pushfstring(L,
         "%s\\custom\\lua\\lib\\?.lua;"
         "%s\\custom\\lua\\lib\\?\\init.lua;"
         "%s\\custom\\lua\\?.lua;"
-        "%s\\custom\\lua\\?\\init.lua",
-        exe, exe, exe, exe);
+        "%s\\custom\\lua\\?\\init.lua;"
+        "%s\\sdk\\custom\\lua\\lib\\?.lua;"
+        "%s\\sdk\\custom\\lua\\lib\\?\\init.lua;"
+        "%s\\sdk\\custom\\lua\\?.lua;"
+        "%s\\sdk\\custom\\lua\\?\\init.lua",
+        exe, exe, exe, exe, exe, exe, exe, exe);
     lua_setfield(L, -2, "path");
     // Disable cpath entirely — we don't want users loading random DLLs into
     // Sacred's process from the script tree.
@@ -640,9 +662,13 @@ static bool bake_one_file(const char* lua_path, const char* out_bin_path) {
 // `<custom_dir>/<rel>.bin`. Skips files that fail to bake (logged).
 // Uses the shared lua_State `L` so module-level state (e.g. lib/text.lua's
 // inline-string registry) accumulates across all baked mods.
+// `shadow_dir` is the higher-priority tree, or nullptr. A .lua file that also
+// exists there at the same relative path is skipped here: the other walk bakes
+// it, and baking both would run the same mod twice.
 static int walk_and_bake(lua_State* L,
                           const char* lua_dir, const char* custom_dir,
-                          const char* sub_prefix)
+                          const char* sub_prefix,
+                          const char* shadow_dir = nullptr)
 {
     // sub_prefix accumulates the relative path under lua/. Example final
     // mapping: lua/bin/TYPE_NPC_SERAPHIM/FunkCode.lua -> custom/bin/TYPE_NPC_SERAPHIM/FunkCode.bin
@@ -682,13 +708,27 @@ static int walk_and_bake(lua_State* L,
             } else {
                 _snprintf_s(child_prefix, _TRUNCATE, "%s", fd.cFileName);
             }
-            baked += walk_and_bake(L, lua_dir, custom_dir, child_prefix);
+            baked += walk_and_bake(L, lua_dir, custom_dir, child_prefix, shadow_dir);
             continue;
         }
         // Must end in ".lua"
         size_t fname_len = strlen(fd.cFileName);
         if (fname_len < 4 ||
             _stricmp(fd.cFileName + fname_len - 4, ".lua") != 0) continue;
+        // The player's tree wins: if the same mod exists there, skip ours.
+        if (shadow_dir) {
+            char shadowed[MAX_PATH];
+            if (sub_prefix && sub_prefix[0]) {
+                _snprintf_s(shadowed, _TRUNCATE, "%s\\%s\\%s", shadow_dir, sub_prefix, fd.cFileName);
+            } else {
+                _snprintf_s(shadowed, _TRUNCATE, "%s\\%s", shadow_dir, fd.cFileName);
+            }
+            if (file_exists(shadowed)) {
+                sdk_log("[lua_bake] '%s' overridden by custom/lua -- skipping the SDK copy",
+                        fd.cFileName);
+                continue;
+            }
+        }
         // Mirror to <custom_dir>/<sub_prefix>/<name>.bin
         char rel_no_ext[MAX_PATH];
         if (sub_prefix && sub_prefix[0]) {
@@ -745,12 +785,13 @@ void bake_all() {
     g_busy = true;
     ensure_label_map();
 
-    char lua_dir[MAX_PATH], custom_dir[MAX_PATH];
-    resolve_dirs(lua_dir, custom_dir);
+    char user_lua[MAX_PATH], sdk_lua[MAX_PATH], custom_dir[MAX_PATH];
+    resolve_dirs(user_lua, sdk_lua, custom_dir);
 
-    DWORD attrs = GetFileAttributesA(lua_dir);
-    if (attrs == INVALID_FILE_ATTRIBUTES) {
-        set_status("no custom/lua directory — skipping bake");
+    bool has_user = GetFileAttributesA(user_lua) != INVALID_FILE_ATTRIBUTES;
+    bool has_sdk  = GetFileAttributesA(sdk_lua)  != INVALID_FILE_ATTRIBUTES;
+    if (!has_user && !has_sdk) {
+        set_status("no custom/lua or sdk/custom/lua directory — skipping bake");
         g_busy = false;
         return;
     }
@@ -771,7 +812,14 @@ void bake_all() {
     register_sacred_api(L);
     configure_package_path(L);
 
-    int n = walk_and_bake(L, lua_dir, custom_dir, "");
+    // The player's own mods first, then the framework's, skipping anything the
+    // player has already replaced.
+    sdk_log("[lua_bake] trees: user='%s'%s  sdk='%s'%s", user_lua,
+            has_user ? "" : " (absent)", sdk_lua, has_sdk ? "" : " (absent)");
+    int n = 0;
+    if (has_user) n += walk_and_bake(L, user_lua, custom_dir, "");
+    if (has_sdk)  n += walk_and_bake(L, sdk_lua,  custom_dir, "",
+                                     has_user ? user_lua : nullptr);
 
     // Run finalize hooks (text.flush, …) regardless of bake count so a
     // standalone string-only mod still gets its global.res written.
@@ -785,7 +833,7 @@ void bake_all() {
     // DO NOT lua_close(L) — runtime owns it now.
 
     if (n == 0) {
-        set_status("custom/lua/ has no .lua mods to bake");
+        set_status("no .lua mods to bake in custom/lua or sdk/custom/lua");
     } else {
         set_status("baked %d Lua mod%s (%ld records total)",
                    n, n == 1 ? "" : "s", g_baked_records);

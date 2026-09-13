@@ -25,7 +25,15 @@ re/patch_review_queue.md
 patchset/records_generated.inc
 hd/hd_table.inc
 
+# The Lua framework at custom/ IS the product and is tracked -- except the
+# vanilla script dumps under it: those are decompiled game data, the same policy
+# as Sacred_decrypted.exe and re/ghidra/decompiled. Regenerate them locally from
+# your own install; never redistribute.
+custom/lua/_vanilla/*
+!custom/lua/_vanilla/README.md
+
 # Build artifacts
+dist/
 Release/
 Debug/
 x64/

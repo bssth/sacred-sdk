@@ -9,6 +9,10 @@
 //   - **Zero changes to the Steam install**. Modders drop files in
 //     `<game_dir>\custom\<sub>\<file>` mirroring the original tree.
 //     Steam's "Verify integrity" never sees them, never overwrites them.
+//   - **Two trees, the player's first**. A read is served from
+//     `<game_dir>\custom\<rel>` if it exists, otherwise from
+//     `<game_dir>\sdk\custom\<rel>` -- the framework shipped with the SDK.
+//     So a player can override anything the SDK ships without touching it.
 //   - **Read-only redirection**. We only swap the path for READ opens.
 //     Sacred's write opens (logs, save games) go through untouched.
 //   - **No content-type assumptions**. The same hook handles
@@ -43,7 +47,8 @@ const char* last_redirect() { return g_last_redirect; }
 
 static char g_game_dir[MAX_PATH] = {0};        // e.g. E:\SteamLibrary\...\Sacred Gold
 static size_t g_game_dir_len = 0;
-static char g_custom_dir[MAX_PATH] = {0};      // <game_dir>\custom
+static char g_custom_dir[MAX_PATH] = {0};      // <game_dir>\custom      (the player's)
+static char g_sdk_custom_dir[MAX_PATH] = {0};  // <game_dir>\sdk\custom (the SDK's)
 
 static bool path_starts_with_i(const char* p, const char* prefix, size_t prefix_len) {
     return _strnicmp(p, prefix, (int)prefix_len) == 0;
@@ -83,8 +88,9 @@ static bool to_relative(const char* in, char out_rel[MAX_PATH]) {
         // top-level file — these are EXE, DLLs, configs etc. never override.
         return false;
     }
-    // Reject anything that's already inside the override dir.
+    // Reject anything that's already inside either override tree.
     if (_strnicmp(rel, "custom\\", 7) == 0) return false;
+    if (_strnicmp(rel, "sdk\\custom\\", 11) == 0) return false;
     // Reject parent-dir escapes for safety.
     if (strstr(rel, "..\\")) return false;
 
@@ -92,9 +98,10 @@ static bool to_relative(const char* in, char out_rel[MAX_PATH]) {
     return true;
 }
 
-// Build <game_dir>\custom\<rel>
-static bool build_custom_path(const char* rel, char out[MAX_PATH]) {
-    int r = _snprintf_s(out, MAX_PATH, _TRUNCATE, "%s\\%s", g_custom_dir, rel);
+// Build <root>\<rel>
+static bool build_override_path(const char* root, const char* rel, char out[MAX_PATH]) {
+    if (!root[0]) return false;
+    int r = _snprintf_s(out, MAX_PATH, _TRUNCATE, "%s\\%s", root, rel);
     return r > 0;
 }
 
@@ -142,15 +149,20 @@ static HANDLE WINAPI hook_CreateFileA(LPCSTR lpFileName, DWORD dwDesiredAccess,
     if (is_read_only) {
         char rel[MAX_PATH];
         if (to_relative(lpFileName, rel)) {
-            char custom_path[MAX_PATH];
-            if (build_custom_path(rel, custom_path) && custom_exists(custom_path)) {
-                _snprintf_s(g_last_redirect, _TRUNCATE,
-                            "%s  ->  custom\\%s", lpFileName, rel);
-                InterlockedIncrement(&g_redirected);
-                sdk_log("[fs_override] %s  ->  %s", lpFileName, custom_path);
-                return orig_CreateFileA(custom_path, dwDesiredAccess, dwShareMode,
-                                        lpSecAttrs, dwCreationDisposition,
-                                        dwFlagsAndAttributes, hTemplateFile);
+            // The player's tree first, then the SDK's.
+            const char* roots[2] = { g_custom_dir, g_sdk_custom_dir };
+            const char* labels[2] = { "custom", "sdk\\custom" };
+            for (int i = 0; i < 2; i++) {
+                char path[MAX_PATH];
+                if (build_override_path(roots[i], rel, path) && custom_exists(path)) {
+                    _snprintf_s(g_last_redirect, _TRUNCATE,
+                                "%s  ->  %s\\%s", lpFileName, labels[i], rel);
+                    InterlockedIncrement(&g_redirected);
+                    sdk_log("[fs_override] %s  ->  %s", lpFileName, path);
+                    return orig_CreateFileA(path, dwDesiredAccess, dwShareMode,
+                                            lpSecAttrs, dwCreationDisposition,
+                                            dwFlagsAndAttributes, hTemplateFile);
+                }
             }
         }
     }
@@ -168,7 +180,8 @@ void install() {
         if (slash) *slash = 0;
         g_game_dir_len = strlen(g_game_dir);
     }
-    _snprintf_s(g_custom_dir, _TRUNCATE, "%s\\custom", g_game_dir);
+    _snprintf_s(g_custom_dir,     _TRUNCATE, "%s\\custom",          g_game_dir);
+    _snprintf_s(g_sdk_custom_dir, _TRUNCATE, "%s\\sdk\\custom", g_game_dir);
 
     // NB: do NOT call CreateDirectoryA / any filesystem API from DllMain —
     // the Windows loader holds its lock during DLL init and a filesystem
@@ -182,8 +195,8 @@ void install() {
     orig_CreateFileA = (CreateFileA_t)iat::patch(
         exe, "KERNEL32.dll", "CreateFileA", (void*)hook_CreateFileA);
 
-    sdk_log("[fs_override] installed. game_dir='%s'  custom_dir='%s'  orig_CreateFileA=%p",
-            g_game_dir, g_custom_dir, orig_CreateFileA);
+    sdk_log("[fs_override] installed. game_dir='%s'  custom='%s'  sdk_custom='%s'  orig_CreateFileA=%p",
+            g_game_dir, g_custom_dir, g_sdk_custom_dir, orig_CreateFileA);
 }
 
 }} // namespace sdk::fs_override

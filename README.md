@@ -17,7 +17,8 @@ mods in **Lua** without ever modifying the original game files.
 SacredSDK is a DLL that Sacred loads at startup (via the `ijl15.dll`
 proxy slot — no patching of `Sacred.exe`). On load it:
 
-1. **Bakes Lua mods** at `custom/lua/**/*.lua` into Sacred's native
+1. **Bakes Lua mods** at `custom/lua/**/*.lua` (yours) and
+   `sdk/custom/lua/**/*.lua` (the framework, yours wins) into Sacred's native
    bytecode (the `FunkCode.bin` format used by every quest, dialog,
    and creature in the game).
 2. **Patches resource lookups** so any file Sacred opens can be
