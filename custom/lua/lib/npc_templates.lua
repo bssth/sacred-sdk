@@ -15,6 +15,9 @@
 -- Opcode atom forms in a template's `ops` list:
 --   {0x02,'TYPE'}        creature type id  (hole: spawn type)
 --   {0x02,'SUBID'}       2nd 0x02 = NPC sub/instance id (optional)
+--   {0x02,'WEAPON'}      a 2nd 0x02 is an EQUIPMENT item type (RE_rewards_npc_world.md,
+--                        CreateNPC table): vanilla's awake fighters carry 1729 sword x95,
+--                        1712 dagger x80, 1724 bastard sword x52 (hole: opts.weapon)
 --   {0x01,'NAME'}        unique name cstr  (hole: opts.name)
 --   {0x04,'POS'}         position: i32 -2 + ASCIIZ (hole: opts.pos)
 --   {0x04,'POSI'}        position: numeric vx i32 (hole: opts.pos #)
@@ -91,6 +94,50 @@ M.templates['named_enemy'] = {
   top_types = { 'Brigand' },
   ops = {
     {0x02,'TYPE'}, {0x01,'NAME'}, {0x04,'POS'}, {0x11,'GROUP'}, {0x08}, {0x12},
+    {0x05,'HOOK'}, {0x00},
+  },
+}
+
+-- named_guard : a named awake fighter, 01 'res:<name>' 02 type 04 pos [02 weapon]
+-- 08 12 (1,851 named CreateNPC records in base:VAMPIRELADY carry 08 12). Side 08 + wake
+-- 12 make the ENGINE arm its AI the way friendly_town_guard does, so it fights
+-- (give it the ally stance 7 after the spawn, as the scene guards get). Unlike
+-- quest_npc (side off, 0e) it does not stand and watch the hero.
+M.templates['named_guard'] = {
+  archetype = 'named_guard',
+  vanilla_count = 1851,
+  src_offset = 0,
+  top_types = { 'Dark Elven Zhur-Urkahi' },
+  ops = {
+    {0x01,'NAME'}, {0x02,'TYPE'}, {0x04,'POS'}, {0x02,'WEAPON'}, {0x08}, {0x12}, {0x00},
+  },
+}
+
+-- mount : 722 vanilla records (StartCode, the world's horses, types 550..554):
+-- 01 'res:<name>' 02 type 04 pos 90 1. Op 0x90 is the creature's level
+-- (FUN_00482510:1099-1108: raised to it through FUN_00564d60, byte +0x400).
+M.templates['mount'] = {
+  archetype = 'mount',
+  vanilla_count = 722,
+  src_offset = 0x00bb15,
+  top_types = { 'Horse' },
+  ops = {
+    {0x01,'NAME'}, {0x02,'TYPE'}, {0x04,'POS'}, {0x90,'#u16',1}, {0x00},
+  },
+}
+
+-- dormant_group : SDK-composed. The vanilla ambush: enemies placed with the
+-- side switched off (0e, the townsperson / dormant_enemy shape) in a group, so
+-- they stand around peacefully until one SetGroupState `11 <group> 08 12` turns
+-- the whole group hostile and awake (vanilla btn_accept_10253_start). NAME and
+-- HOOK are optional: give them to the one the quest talks to or waits to die.
+M.templates['dormant_group'] = {
+  archetype = 'dormant_group',
+  vanilla_count = 0,
+  src_offset = 0x061caf,
+  top_types = { 'Brigand', 'Slaver', 'Slavecatcher' },
+  ops = {
+    {0x02,'TYPE'}, {0x01,'NAME'}, {0x04,'POS'}, {0x11,'GROUP'}, {0x0e},
     {0x05,'HOOK'}, {0x00},
   },
 }
@@ -240,6 +287,8 @@ function M.build(name, opts)
       p[#p+1] = u8(0x02) .. le32(opts.type)
     elseif tag == 'SUBID' then
       if opts.sub_id then p[#p+1] = u8(0x02) .. le32(opts.sub_id) end
+    elseif tag == 'WEAPON' then
+      if opts.weapon then p[#p+1] = u8(0x02) .. le32(opts.weapon) end
     elseif tag == 'NAME' then
       if opts.name then p[#p+1] = u8(0x01) .. cstr(opts.name) end
     elseif tag == 'LINK' then
