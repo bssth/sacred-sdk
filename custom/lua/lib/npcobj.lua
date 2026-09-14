@@ -363,7 +363,84 @@ function Npc:dismiss()
   return sacred.npc_dismiss(self._h)
 end
 -- Clean engine removal (the DelNPC path). After this the Npc is dead.
-function Npc:despawn() return sacred.npc_despawn(self._h) end
+function Npc:despawn()
+  M.forget_speaker(self._h)
+  return sacred.npc_despawn(self._h)
+end
+
+-- ── Text-override speakers (Npc:say / dialog_off) ───────────────────────────
+-- The DLL's by-speaker text hook (text_logger.cpp speaker_lookup) keeps
+-- {handle -> text key} and treats creature+0x150 == 6 or 7 as "this NPC's window
+-- is open". 6 is the engine's DEAD state (FUN_00549080), so a registered NPC that
+-- died answered for every vanilla conversation from then on -- LIVE 2026-09-14:
+-- the slaver chief's corpse put his line into the mouths of vanilla soldiers. A
+-- freed handle can also come back as another creature. So every registration is
+-- remembered with the creature's type, and one that died, vanished or changed
+-- type is dropped from the hook.
+M._speakers = M._speakers or {}
+
+local function track_speaker(o, key)
+  if not sacred.dialog_speaker then return end
+  sacred.dialog_speaker(o._h, key)
+  if key then M._speakers[o._h] = { type = o:type() } else M._speakers[o._h] = nil end
+end
+
+function M.forget_speaker(h)
+  if M._speakers[h] and sacred.dialog_speaker then sacred.dialog_speaker(h, nil) end
+  M._speakers[h] = nil
+end
+
+local spk_t = 0
+sacred.on_tick(function()
+  spk_t = spk_t + 1
+  if spk_t < 4 then return end
+  spk_t = 0
+  for h, s in pairs(M._speakers) do
+    local inf = sacred.npc_info(h)
+    local a = inf and sacred.npc_ai and sacred.npc_ai(h)
+    local why = (not inf and "gone") or (inf.type ~= s.type and "another creature")
+             or (a and a.s150 == 6 and "dead") or nil
+    if why then
+      M.forget_speaker(h)
+      sacred.log(("[say] h=%d %s: its text override is dropped"):format(h, why))
+    end
+  end
+end)
+
+-- Put the NPC on (kx, ky) AND make that its home, so the idle AI keeps it there
+-- instead of walking it back to where it was created (Vb.ST.anchor).
+function Npc:place(kx, ky)
+  local ok = self:teleport(kx, ky)
+  self:home(kx, ky)
+  return ok
+end
+
+function Npc:home(kx, ky)
+  local Vb = require "verbs"
+  return self:state(Vb.ST.anchor(kx, ky, 0))
+end
+
+-- The SetNPCState record (tag 0x03) for this NPC with state ops (Vb.ST), for
+-- A.run. While the NPC is bound to its dialog node and not muted, the record also
+-- carries `09 <node>` -- the way vanilla writes it next to a home change
+-- (`01 'res:17523' 4d 4097 2547 0 09 'auftrag9011'`, 16 of 39 op-4d records).
+-- LIVE 2026-09-14: after a SetNPCState 4d alone Rocheford stopped answering a
+-- click; re-binding in the same record keeps the dialog whatever the handler
+-- resets. Needs the spawn name (`_res`); nil without one.
+function Npc:state_record(...)
+  local who = self._res
+  if not who then return nil end
+  local Vb = require "verbs"
+  local ops = { ... }
+  if self._name and self._dlg and not self._mute then ops[#ops + 1] = Vb.ST.node(self._name) end
+  return Vb.npc_state(who, table.concat(ops))
+end
+
+function Npc:state(...)
+  local r = self:state_record(...)
+  if not r then return false end
+  return require("actions").run(r)
+end
 -- Change disposition after an event. d = 'hostile' (attacks the hero),
 -- 'ally' (fights monsters, friendly to hero), 'neutral' (immune non-
 -- combatant). Re-aggros so it takes effect immediately mid-game.
@@ -379,6 +456,98 @@ end
 function Npc:walk_to(kx, ky)
   return sacred.npc_teleport(self._h, kx, ky)
 end
+
+-- Walk to (kx, ky) on its own legs: vanilla's NPC_Goto by the spawn name
+-- (`_res`), watched until it gets there. The destination also becomes the NPC's
+-- HOME (SetNPCState op 0x4d, Vb.ST.anchor) in the same section run: the idle AI
+-- walks a creature that strays ~3.7 tiles from its home back there
+-- (FUN_00542b20:333-360), and a teleport does not move the home. LIVE
+-- 2026-09-14, before this: Slayer and Bladelok walked 5-15 tiles and stopped, and
+-- Rocheford, teleported 500 tiles from his home, did not move at all, with or
+-- without op 0x66. One that has not left its tile in ~4 s is sent again, and
+-- after `opts.tries` (3) it is put on the spot. `on_arrive(self, placed)` fires
+-- once, within 3 tiles. `opts.run` adds NPC_Goto's op 0x66, the other move mode
+-- (walk versus run still unconfirmed). A walk is Lua state: a savegame keeps the
+-- NPC where it was, not the walk. `Npc:arrive()` ends a walk now: the NPC is put
+-- on the spot and on_arrive fires. Talking pauses the watch.
+local walks = {}
+
+local function send_walk(o, kx, ky, run)
+  local Vb = require "verbs"
+  return require("actions").run(o:state_record(Vb.ST.anchor(kx, ky, 0)),
+                                Vb.npc_goto(o._res, { kx, ky }, run))
+end
+function Npc:go(kx, ky, on_arrive, opts)
+  assert(self._res, "Npc:go needs the spawn name (spawn_template, or set o._res)")
+  opts = opts or {}
+  self:set_stationary(false)                      -- the flag also holds it in place
+  send_walk(self, kx, ky, opts.run)
+  walks[self._h] = { o = self, x = kx, y = ky, fn = on_arrive, run = opts.run,
+                     tries = opts.tries or 3, t = 0 }
+  return self
+end
+
+function Npc:walking() return walks[self._h] ~= nil end
+
+function Npc:arrive()
+  local w = walks[self._h]
+  if not w then return false end
+  walks[self._h] = nil
+  self:teleport(w.x, w.y)
+  sacred.log(("[walk] %s put on %d,%d"):format(tostring(self._res), w.x, w.y))
+  if w.fn then
+    local ok, err = pcall(w.fn, self, true)
+    if not ok then sacred.log("[walk] on_arrive failed: " .. tostring(err)) end
+  end
+  return true
+end
+
+sacred.on_tick(function()
+  for h, w in pairs(walks) do
+    if not w.o:alive() then
+      walks[h] = nil
+    elseif sacred.npc_in_dialog(h) then
+      w.t, w.last = 0, nil                        -- talking is not being stuck
+      w.talked = true
+    else
+      if w.talked then                            -- the talk ended: walk on
+        w.talked = nil
+        send_walk(w.o, w.x, w.y, w.run)
+      end
+      w.t = w.t + 1
+      if w.t >= 16 then
+        w.t = 0
+        local x, y = w.o:pos()
+        local here = ("%s,%s"):format(tostring(x), tostring(y))
+        local dx, dy = (x or 0) - w.x, (y or 0) - w.y
+        local done, placed = dx * dx + dy * dy <= 9, false
+        if not done and here == w.last then        -- stuck on the same tile as 4 s ago
+          w.tries = w.tries - 1
+          if w.tries > 0 then
+            send_walk(w.o, w.x, w.y, w.run)
+            local a = sacred.npc_ai and sacred.npc_ai(w.o._h)
+            sacred.log(("[walk] %s stuck at %s, walking again (%d left; ai state %s fc %s s150 %s)")
+              :format(tostring(w.o._res), here, w.tries, tostring(a and a.state),
+                      tostring(a and a.fc), tostring(a and a.s150)))
+          else
+            w.o:teleport(w.x, w.y)
+            sacred.log(("[walk] %s could not path to %d,%d; placed there")
+              :format(tostring(w.o._res), w.x, w.y))
+            done, placed = true, true
+          end
+        end
+        w.last = here
+        if done then
+          walks[h] = nil
+          if w.fn then
+            local ok, err = pcall(w.fn, w.o, placed)
+            if not ok then sacred.log("[walk] on_arrive failed: " .. tostring(err)) end
+          end
+        end
+      end
+    end
+  end
+end)
 
 -- EXPERIMENTAL: give the NPC a visible item. item_type = item type id
 -- (same id space as creatures). slot defaults to 0xC (weapon hand);
@@ -413,6 +582,7 @@ function Npc:bind_quest(name, icon_on, node)
   self._name = name
   local idx = sacred.npc_bind_quest(self._h, name or "", icon_on, node or nil)
   self._dlg = idx
+  self._mute = false
   return idx
 end
 function Npc:dlg_index() return self._dlg end
@@ -433,7 +603,7 @@ function Npc:say(text_key, vanilla_node, voice)
   local ok = sacred.dialog_arm(self._h, self._name, text_key, voice)
   -- by-NPC text: whatever vanilla node the engine attaches to this NPC's talk
   -- (it comes from the region quest pool and changes per game), show text_key.
-  if sacred.dialog_speaker then sacred.dialog_speaker(self._h, text_key) end
+  track_speaker(self, text_key)
   if vanilla_node and sacred.dialog_override then
     -- typo guard: warn (don't fail) if the node isn't in the vanilla catalogue.
     local okreq, nodes = pcall(require, "dialog_nodes")
@@ -468,6 +638,7 @@ end
 -- never closes the dialog.
 function Npc:set_talkable(on)
   if on == nil then on = true end
+  self._mute = not on
   if not sacred.npc_talkable then return false end
   return sacred.npc_talkable(self._h, on)
 end
@@ -476,7 +647,7 @@ function Npc:dialog_off(next_key, vanilla_node)
   local ok = sacred.dialog_clear(self._h)
   self:set_talkable(false)     -- and stop the pool from handing him a new line
   if next_key then
-    if sacred.dialog_speaker then sacred.dialog_speaker(self._h, next_key) end
+    track_speaker(self, next_key)
     if vanilla_node and sacred.dialog_override then
       sacred.dialog_override(vanilla_node, next_key)
     end
@@ -597,6 +768,9 @@ end
 --                         { label = "res:1038" } } }                         -- Reject: closes
 -- Labels: "res:<id>" (1024 OK, 1037 Accept, 1038 Reject) or "res:<NAME>" baked
 -- with text.lua. No buttons given = a single OK. Calling it again replaces the node.
+-- A button's `records` (a record string or a list) run inside the engine the
+-- moment it is clicked, before `on` gets the heartbeat after: a price paid with
+-- IF HasGold { AddGold -N; SetVar }, so Lua only reads the variable afterwards.
 M._section_fn = M._section_fn or {}
 function Npc:dialog(spec)
   local S = require "sections"
@@ -611,7 +785,9 @@ function Npc:dialog(spec)
   for k, b in ipairs(spec.buttons or { { label = S.OK } }) do
     if k > 4 then break end
     local action = ("sdk_%s_b%d"):format(base, k)
-    S.define(action)                               -- empty section: the Lua side acts
+    local recs = b.records or ""
+    if type(recs) == "table" then recs = table.concat(recs) end
+    S.define(action, recs)                         -- the engine's part; Lua acts after
     if M._section_fn[action] == nil then           -- one trigger per action, ever
       sacred.on_trigger("SECTION:" .. action, function()
         local fn = M._section_fn[action]
