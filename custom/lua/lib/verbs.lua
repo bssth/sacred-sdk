@@ -115,6 +115,18 @@ function Vb.music_control(on) return rec(0x81, "\0\11" .. u32(on and 1 or 0)) en
 -- the text of section "Dialog:<node>". Vanilla: `5f | 01 'wegweiser_MPStart2'`.
 function Vb.popup(node) return rec(0x5f, "\0" .. name(node)) end
 
+-- DlgNPC (tag 0x28): declare a dialog node, the StartCode declaration: the walker
+-- appends the 80 bytes after the flag byte to the DlgNPC table (qm+0x755C) as
+-- they are, handle -1, bound to nobody. `marker` 13 draws nothing. The section
+-- index stays 0: the engine finds the text by the name "Dialog:<node>" first.
+-- Popup opens such a node with the hero, the way a signpost does. Every run
+-- appends another entry, so declare a node once.
+function Vb.declare_node(node, marker)
+  assert(#node < 64, "verbs.declare_node: a node name has at most 63 characters")
+  return rec(0x28, "\0" .. i32(-1) .. node .. string.rep("\0", 64 - #node)
+    .. u32(0) .. u32(marker or 13) .. i32(0))
+end
+
 -- Partikel (tag 0x63), the shrine blessing on the hero: `effect` 0..5 for
 -- `seconds`, with the flash, the animation and the sound. Vanilla: statue_ok.
 function Vb.blessing(effect, seconds)
@@ -186,7 +198,13 @@ function Vb.ST.dialog(node) return "\9" .. node .. "\0" end
 function Vb.ST.node(n) return "\9" .. n .. "\0" end
 -- Op 0x0a with 0: unbind -- no dialog, no glyph (870 vanilla records use 0).
 Vb.ST.no_node = "\10" .. string.pack("<I2", 0)
-function Vb.ST.anchor(x, y, level) return "\77" .. u32(x) .. u32(y) .. u32(level or 0) end   -- cells (inferred)
+-- Op 0x4d: the creature's HOME (walk anchor, creature+0x2b9..+0x2c5), in the
+-- same KompassPos units as NPC_Goto's op 04 (both convert through FUN_006224b0,
+-- FUN_00461540:180-205 / FUN_0049e210:213). The idle AI (FUN_00542b20:333-360)
+-- sends a creature more than ~200 world units (~3.7 tiles) from its home back
+-- there, now and then; a teleport of a creature outside the party does not move
+-- its home. 398 vanilla records.
+function Vb.ST.anchor(x, y, level) return "\77" .. u32(x) .. u32(y) .. u32(level or 0) end
 
 -- SetNPCState (tag 0x03): state ops (Vb.ST) for creature `who`; a name the
 -- engine cannot resolve does nothing. A hook replaces the creature's earlier
@@ -391,6 +409,10 @@ function Vb.create_obj(type_id, pos, opts)
   if opts.dir then p[#p + 1] = "\3" .. string.pack("<I2", opts.dir & 0xFFFF) end
   if opts.name then p[#p + 1] = "\41" .. opts.name .. "\0" end        -- op 0x29
   if opts.take then p[#p + 1] = "\65" .. opts.take .. "\0" end        -- op 0x41
+  -- op 0x8e: lay it in the world for pick-up instead of handing it over. With
+  -- 0x61 that is vanilla's quest item on the ground, the DQ fetch target:
+  -- `01 'res:ZIELOBJEKT_15054' 02 1722 04 'POS_ZIEL_15054' 41 'od_15054' 8e 61`.
+  if opts.place then p[#p + 1] = "\142" end
   if opts.give then p[#p + 1] = "\97" end                              -- op 0x61: quest item
   return rec(0x08, table.concat(p))
 end

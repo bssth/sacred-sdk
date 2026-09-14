@@ -76,6 +76,29 @@ function Sc.talk(who, node) return Vb.talk_to(who, node) end
 -- (Npc:bind_quest + Npc:dialog) or a shipped one.
 function Sc.say(node) return Vb.popup(node) end
 
+-- A window with our text and no one speaking: the hero's own thoughts, a note
+-- found on the ground. A node of its own (declared the first time, with the
+-- vanilla DlgNPC record) opened by Popup, the signpost way. Runs on the next
+-- heartbeat; `on_ok` fires when the player closes it.
+--   Sc.note("q2_axe", "Q2_AXE_NOTE", function() ... end)
+local S = require "sections"
+local notes = {}
+function Sc.note(node, key, on_ok)
+  local ok_section = node .. "_ok"
+  S.define("Dialog:" .. node, S.text(key), S.button(S.OK, ok_section))
+  S.define(ok_section)
+  local first = notes[node] == nil
+  if first then
+    sacred.on_trigger("SECTION:" .. ok_section, function()
+      local fn = notes[node]
+      if fn then fn() end
+    end)
+  end
+  notes[node] = on_ok or false
+  if first then return A.run(Vb.declare_node(node), Vb.popup(node)) end
+  return A.run(Vb.popup(node))
+end
+
 -- Jump (no walking), attack, and a particle effect -- the other queued kinds.
 function Sc.teleport(who, p, facing) return Vb.teleport(who, p, facing) end
 function Sc.attack(who, target) return Vb.attack(who, target) end
