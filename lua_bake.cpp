@@ -1029,7 +1029,7 @@ static int walk_and_bake(lua_State* L,
 // strings), this is where they get written into custom/scripts/<lang>/global.res.
 // Other modules can plug in by adding themselves to this finalize list (see
 // FINALIZE_MODULES below).
-static const char* const FINALIZE_MODULES[] = { "text", nullptr };
+static const char* const FINALIZE_MODULES[] = { "classmod", "text", nullptr };
 
 static void run_finalize_hooks(lua_State* L) {
     for (int i = 0; FINALIZE_MODULES[i]; i++) {

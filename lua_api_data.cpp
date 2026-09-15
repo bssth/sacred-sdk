@@ -18,6 +18,9 @@
 #include "ports/engine/sacred_hash.h"      // sacred.hash
 #include "engine/mem.h"                 // sacred.peek_u32 / nearby_list / npc_ai
 #include "engine/singletons.h"          // hero resolve for npc_hire / hero_party
+#include <vector>                        // sacred.model_slots queue
+#include <string>
+#include "engine/build_profile.h"         // sacred.patch_u32 gate
 
 extern "C" {
 #include "lua/lua.h"
@@ -386,6 +389,248 @@ static int l_sacred_npc_cmd(lua_State* L) {
     return 1;
 }
 
+// ---------------------------------------------------------------------------
+// Model motion slots (lib/classmod.lua, 2026-09-16).
+// cGrannyModelManager (singleton [0x00AA4538], ctor FUN_00411000) keeps one
+// 0x4AA-byte header per model in a vector at +0x48/+0x4C, the pak\Models.tmp
+// record layout (name at +0). Motion slot s of model m is the u32 at
+// header+0x70+4*s (FUN_004135d0), an index into the motion vector at +0x54;
+// 0 = INVALID_MOTION, which the hero plays as a T-pose.
+// ---------------------------------------------------------------------------
+struct SlotWrite { uint32_t model; char name[32]; uint32_t slot, from, to; bool logged; };
+static std::vector<SlotWrite> g_slot_writes;
+static SRWLOCK g_slot_lock = SRWLOCK_INIT;
+
+static const uint32_t MODEL_HDR_SIZE = 0x4AA;
+static const uint32_t MODEL_SLOT_MAX = 259;   // header+0x47C onward is per-run data
+
+// sacred.model_slots(model, name, {[slot] = motion, ...}) -> queued count
+// Queues writes of empty (0) motion slots; model_slots_tick applies each one
+// once the manager holds its headers, only while the header's name matches
+// and the slot still holds 0. Safe to call during the bake.
+static int l_sacred_model_slots(lua_State* L) {
+    uint32_t model = (uint32_t)luaL_checkinteger(L, 1);
+    const char* name = luaL_checkstring(L, 2);
+    luaL_checktype(L, 3, LUA_TTABLE);
+    int queued = 0;
+    AcquireSRWLockExclusive(&g_slot_lock);
+    lua_pushnil(L);
+    while (lua_next(L, 3)) {
+        if (lua_isinteger(L, -2) && lua_isinteger(L, -1)) {
+            SlotWrite w{};
+            w.model = model;
+            strncpy_s(w.name, _TRUNCATE, name, _TRUNCATE);
+            w.slot = (uint32_t)lua_tointeger(L, -2);
+            w.to = (uint32_t)lua_tointeger(L, -1);
+            if (w.slot < MODEL_SLOT_MAX && w.to) { g_slot_writes.push_back(w); queued++; }
+        }
+        lua_pop(L, 1);
+    }
+    ReleaseSRWLockExclusive(&g_slot_lock);
+    sdk_log("[model_slots] model #%u '%s': %d slot writes queued", model, name, queued);
+    lua_pushinteger(L, queued);
+    return 1;
+}
+
+// Guarded writes into the exe image (full VAs, rebased), queued from Lua and
+// applied from the heartbeat once the build is TRUSTED (post-decrypt pins).
+// Each is written only while the live bytes equal `expect`; anything else is
+// refused and logged, so a different build never gets a stray write.
+//   sacred.patch_u32(va, expect, value, what)
+//   sacred.patch_u32_copy(va, expect, src_va, what[, unless])
+//       value = the live u32 at src_va at apply time (a jump-table slot of
+//       another case); skipped when that value equals `unless`
+//   sacred.patch_bytes(va, expect_bytes, new_bytes, what)   (same length, <= 64)
+struct Patch {
+    uint32_t va = 0, copy_from = 0, unless = 0;
+    bool has_unless = false, done = false;
+    std::string expect, value;
+    char what[64] = {0};
+};
+static std::vector<Patch> g_patches;
+
+static std::string u32_bytes(uint32_t v) { return std::string((const char*)&v, 4); }
+
+static void queue_patch(Patch&& p) {
+    AcquireSRWLockExclusive(&g_slot_lock);
+    g_patches.push_back(std::move(p));
+    ReleaseSRWLockExclusive(&g_slot_lock);
+}
+
+static int l_sacred_patch_u32(lua_State* L) {
+    Patch p;
+    p.va = (uint32_t)luaL_checkinteger(L, 1);
+    p.expect = u32_bytes((uint32_t)luaL_checkinteger(L, 2));
+    p.value = u32_bytes((uint32_t)luaL_checkinteger(L, 3));
+    strncpy_s(p.what, _TRUNCATE, luaL_optstring(L, 4, "?"), _TRUNCATE);
+    queue_patch(std::move(p));
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+static int l_sacred_patch_u32_copy(lua_State* L) {
+    Patch p;
+    p.va = (uint32_t)luaL_checkinteger(L, 1);
+    p.expect = u32_bytes((uint32_t)luaL_checkinteger(L, 2));
+    p.copy_from = (uint32_t)luaL_checkinteger(L, 3);
+    strncpy_s(p.what, _TRUNCATE, luaL_optstring(L, 4, "?"), _TRUNCATE);
+    if (lua_isinteger(L, 5)) { p.has_unless = true; p.unless = (uint32_t)lua_tointeger(L, 5); }
+    queue_patch(std::move(p));
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+static int l_sacred_patch_bytes(lua_State* L) {
+    size_t ne = 0, nv = 0;
+    const char* e = luaL_checklstring(L, 2, &ne);
+    const char* v = luaL_checklstring(L, 3, &nv);
+    luaL_argcheck(L, ne == nv && ne > 0 && ne <= 64, 3, "expect and new bytes must be 1..64 bytes, same length");
+    Patch p;
+    p.va = (uint32_t)luaL_checkinteger(L, 1);
+    p.expect.assign(e, ne);
+    p.value.assign(v, nv);
+    strncpy_s(p.what, _TRUNCATE, luaL_optstring(L, 4, "?"), _TRUNCATE);
+    queue_patch(std::move(p));
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+static void patches_apply(uintptr_t r) {
+    if (!engine::build::can_patch_text()) return;
+    for (Patch& p : g_patches) {
+        if (p.done) continue;
+        p.done = true;
+        uintptr_t at = r + p.va;
+        size_t n = p.expect.size();
+        if (p.copy_from) {
+            uint32_t src = 0;
+            if (!engine::mem::read<uint32_t>(r + p.copy_from, &src)) {
+                sdk_log("[patch] %s: source @%08X unreadable", p.what, p.copy_from);
+                continue;
+            }
+            if (p.has_unless && src == p.unless) {
+                sdk_log("[patch] %s: source @%08X holds %08X, skipped", p.what, p.copy_from, src);
+                continue;
+            }
+            p.value = u32_bytes(src);
+        }
+        if (IsBadReadPtr((void*)at, n)) {
+            sdk_log("[patch] %s @%08X unreadable", p.what, p.va);
+        } else if (memcmp((void*)at, p.value.data(), n) == 0) {
+            sdk_log("[patch] %s @%08X already applied", p.what, p.va);
+        } else if (memcmp((void*)at, p.expect.data(), n) != 0) {
+            sdk_log("[patch] %s @%08X refused: live bytes differ from the expected ones", p.what, p.va);
+        } else {
+            DWORD old = 0;
+            bool ok = VirtualProtect((void*)at, n, PAGE_EXECUTE_READWRITE, &old) != 0;
+            if (ok) {
+                memcpy((void*)at, p.value.data(), n);
+                VirtualProtect((void*)at, n, old, &old);
+                FlushInstructionCache(GetCurrentProcess(), (void*)at, n);
+            }
+            sdk_log("[patch] %s @%08X (%u bytes) %s", p.what, p.va, (unsigned)n,
+                    ok ? "ok" : "VirtualProtect FAILED");
+        }
+    }
+}
+
+// sacred.wear_hide(type) -> true
+// Creatures of that type (hero classes whose body classmod replaced) wear no
+// item meshes: the borrowed NPC body is already dressed, and a class's armor
+// meshes do not fit it. FUN_00555300 (visual refresh of one equip slot) wears
+// an item through its only call at 0x00555928 (`call FUN_0044c980`, __thiscall
+// ECX = item, 2 args, ret 8, ESI = the creature). The hook answers "not worn"
+// for a hidden type, which is vanilla's own failure branch (0x005559AE unloads
+// the item model; the item stays in its slot), after the CalcResults(0,1) the
+// success branch would have run. Weapons, rings and wings attach to bones on
+// another path and stay visible.
+static uint32_t g_wear_hide_mask = 0;      // bit t: creature type t (1..31)
+static uintptr_t g_wear_orig = 0;          // live FUN_0044c980
+static uintptr_t g_calc_results = 0;       // live FUN_005796a0 (CalcResults)
+
+__declspec(naked) static void __cdecl hook_wear_item() {
+    __asm {
+        mov eax, dword ptr [esi + 0x10]
+        cmp eax, 32
+        jae wear
+        bt dword ptr [g_wear_hide_mask], eax
+        jnc wear
+        push ecx
+        lea ecx, [esi + 0x3A8]
+        push 1
+        push 0
+        call dword ptr [g_calc_results]
+        pop ecx
+        xor eax, eax
+        ret 8
+    wear:
+        jmp dword ptr [g_wear_orig]
+    }
+}
+
+static int l_sacred_wear_hide(lua_State* L) {
+    lua_Integer t = luaL_checkinteger(L, 1);
+    luaL_argcheck(L, t >= 1 && t < 32, 1, "creature type 1..31");
+    uintptr_t r = api_reb();
+    AcquireSRWLockExclusive(&g_slot_lock);
+    bool first = (g_wear_hide_mask == 0);
+    g_wear_hide_mask |= 1u << (uint32_t)t;
+    ReleaseSRWLockExclusive(&g_slot_lock);
+    if (first) {
+        g_wear_orig = r + 0x0044C980;
+        g_calc_results = r + 0x005796A0;
+        const uint8_t old_call[5] = { 0xE8, 0x53, 0x70, 0xEF, 0xFF };
+        int32_t rel = (int32_t)((uintptr_t)&hook_wear_item - (r + 0x0055592D));
+        Patch p;
+        p.va = 0x00555928;
+        p.expect.assign((const char*)old_call, 5);
+        p.value.assign(1, (char)0xE8);
+        p.value.append((const char*)&rel, 4);
+        strncpy_s(p.what, _TRUNCATE, "wear hook (hidden item meshes)", _TRUNCATE);
+        queue_patch(std::move(p));
+    }
+    sdk_log("[wear_hide] creature type %d wears no item meshes", (int)t);
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+// Heartbeat: apply queued slot writes and patches. Cheap when there are none.
+void model_slots_tick() {
+    if (!g_attach.exe_module) return;
+    AcquireSRWLockExclusive(&g_slot_lock);
+    if (g_slot_writes.empty() && g_patches.empty()) { ReleaseSRWLockExclusive(&g_slot_lock); return; }
+    uintptr_t r = api_reb(), mgr = 0, beg = 0, end = 0;
+    patches_apply(r);
+    int applied = 0, refused = 0;
+    if (engine::mem::read_ptr(r + 0x00AA4538, &mgr) && mgr &&
+        engine::mem::read_ptr(mgr + 0x48, &beg) && beg &&
+        engine::mem::read_ptr(mgr + 0x4C, &end) && end > beg) {
+        uint32_t count = (uint32_t)((end - beg) / MODEL_HDR_SIZE);
+        for (SlotWrite& w : g_slot_writes) {
+            if (w.model >= count) continue;
+            uintptr_t hdr = beg + (uintptr_t)w.model * MODEL_HDR_SIZE;
+            char have[32] = {0};
+            if (IsBadReadPtr((void*)hdr, sizeof(have))) continue;
+            memcpy(have, (void*)hdr, sizeof(have) - 1);
+            uint32_t cur = 0;
+            if (!engine::mem::read<uint32_t>(hdr + 0x70 + 4 * w.slot, &cur) || cur == w.to) continue;
+            if (_stricmp(have, w.name) != 0 || cur != 0) {
+                if (!w.logged) {
+                    sdk_log("[model_slots] model #%u slot %u refused: header '%s' slot=%u (want '%s' slot=0)",
+                            w.model, w.slot, have, cur, w.name);
+                    w.logged = true;
+                    refused++;
+                }
+                continue;
+            }
+            if (engine::mem::write<uint32_t>(hdr + 0x70 + 4 * w.slot, w.to)) applied++;
+        }
+    }
+    ReleaseSRWLockExclusive(&g_slot_lock);
+    if (applied || refused)
+        sdk_log("[model_slots] applied %d slot writes (%d refused)", applied, refused);
+}
+
 // Register all data / engine-introspection bindings onto the `sacred` table
 // (already on top of the stack when called from install_lua_api).
 void install_data_api(lua_State* L) {
@@ -408,6 +653,11 @@ void install_data_api(lua_State* L) {
     lua_pushcfunction(L, l_sacred_npc_ai);         lua_setfield(L, -2, "npc_ai");
     lua_pushcfunction(L, l_sacred_npc_hire);       lua_setfield(L, -2, "npc_hire");
     lua_pushcfunction(L, l_sacred_npc_cmd);        lua_setfield(L, -2, "npc_cmd");
+    lua_pushcfunction(L, l_sacred_model_slots);    lua_setfield(L, -2, "model_slots");
+    lua_pushcfunction(L, l_sacred_patch_u32);      lua_setfield(L, -2, "patch_u32");
+    lua_pushcfunction(L, l_sacred_patch_u32_copy); lua_setfield(L, -2, "patch_u32_copy");
+    lua_pushcfunction(L, l_sacred_patch_bytes);    lua_setfield(L, -2, "patch_bytes");
+    lua_pushcfunction(L, l_sacred_wear_hide);      lua_setfield(L, -2, "wear_hide");
 }
 
 }} // namespace sdk::runtime_triggers

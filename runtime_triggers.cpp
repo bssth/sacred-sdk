@@ -2305,6 +2305,7 @@ static void build_ctx_table(lua_State* L) {
 // class_skills, survival_bonus, bonus_name, resolve_engine, globalres) live in
 // lua_api_data.cpp (refactor A5). install_data_api registers them.
 void install_data_api(lua_State* L);
+void model_slots_tick();   // lua_api_data.cpp: queued model_slots / patch_* writes
 
 void install_lua_api(lua_State* L);
 void install_lua_api(lua_State* L) {
@@ -2515,6 +2516,7 @@ static void fire_tick() {
 // hooks.cpp arms a WM_TIMER on Sacred's main window (250 ms); its TimerProc
 // runs on the game thread inside the message pump — an idle-safe point.
 void heartbeat() {
+    model_slots_tick();       // classmod slot fills and exe patches: no Lua, runs in menus too
     if (!g_ready || !g_L) return;
     vars_tick();              // savegame hooks: patch once, SDK:SAVE_LOADED after a load
     sections_tick();          // SDK sections: patch once, keep injected, run button callbacks
