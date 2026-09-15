@@ -128,6 +128,18 @@ static void sections_inject() {
         bool ours = (b == g_sec_block) && (n == g_sec_vanilla + (unsigned)g_sec_injected);
         if (ours && g_sec_injected == g_sec_n) return;           // up to date
         unsigned vanilla = ours ? g_sec_vanilla : n;             // else the engine rebuilt it
+        // A savegame restores the whole table, the SDK entries of the session that
+        // saved it included: they end it, with virtual starts. Left in place they
+        // shadow ours (FUN_00460590 takes the first name match) and their offsets
+        // point at whatever section now sits there in our store -- LIVE 2026-09-16:
+        // after loads every SDK run returned 0 (23533 = 23495 + the save's 38).
+        unsigned stale = 0;
+        if (!ours)
+            while (vanilla > 0 &&
+                   *(uint32_t*)(b + (size_t)(vanilla - 1) * 0x54 + 0x40) >= SDK_SEC_VBASE) {
+                vanilla--; stale++;
+            }
+        if (stale) sdk_log("[sections] dropped %u SDK entries a savegame brought back", stale);
         unsigned total   = vanilla + (unsigned)g_sec_n;
         uint8_t* blk = (uint8_t*)kOpNew((size_t)total * 0x54);
         if (!blk) { sdk_log("[sections] operator new(%u) failed", total * 0x54); return; }
