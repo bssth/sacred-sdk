@@ -27,6 +27,8 @@
 --                        (MECHANICS 2.13); absent = random (hole: opts.facing)
 --   {0x11,'GROUP'}       team/group id i32 (hole: opts.group)
 --   {0x09,'LINK'}        link existing dlg NPC by name (hole)
+--   {0x02,'ITEMS'}       every item of opts.items (or opts.weapon) as its own op 02
+--   {0x90,'MOUNTLEVEL'}  a horse's op 0x90, i32 (hole: opts.level, default 1)
 --   {op}                 bare flag/side opcode, literal (no hole)
 --   {op,'#i32',v}/{op,'#u16',v}  literal-valued opcode (kept verbatim)
 --   {0x00}               END
@@ -136,15 +138,58 @@ M.templates['talk_guard'] = {
 }
 
 -- mount : 722 vanilla records (StartCode, the world's horses, types 550..554):
--- 01 'res:<name>' 02 type 04 pos 90 1. Op 0x90 is the creature's level
--- (FUN_00482510:1099-1108: raised to it through FUN_00564d60, byte +0x400).
+-- 01 'res:<name>' 02 type 04 pos [03 facing] 90 1. Op 0x90 is the creature's level
+-- (FUN_00482510:1099-1108: raised to it through FUN_00564d60, byte +0x400) and takes
+-- FOUR bytes: vanilla #1471 `... 03 5a 00 90 01 00 00 00`. Until 2026-09-15 this
+-- template wrote two, and the reader took the END byte and whatever followed.
 M.templates['mount'] = {
   archetype = 'mount',
   vanilla_count = 722,
   src_offset = 0x00bb15,
   top_types = { 'Horse' },
   ops = {
-    {0x01,'NAME'}, {0x02,'TYPE'}, {0x04,'POS'}, {0x90,'#u16',1}, {0x00},
+    {0x01,'NAME'}, {0x02,'TYPE'}, {0x04,'POS'}, {0x03,'FACING'}, {0x90,'MOUNTLEVEL'}, {0x00},
+  },
+}
+
+-- horse_dealer : all 56 op-64 CreateNPC records of the corpus are named "Horse
+-- Dealer" or "Orc Horse Master" (base StartCode #1470: 01 'res:17466' 02 288
+-- 04 3360 2513 0 03 90 64). Op 64 sets +0x200 |= 0x4000000, the fourth service bit
+-- (npc_ai_flags.md). The horses he sells are template mount plus one SetNPCState
+-- each: `01 <horse> 63 <dealer> [1f <level>]` (#1473, #1481; Vb.ST.sold_by).
+M.templates['horse_dealer'] = {
+  archetype = 'horse_dealer',
+  vanilla_count = 56,
+  src_offset = 0x00af0d,
+  top_types = { 'Citizen', 'Royal Pioneer', 'Haduk Merchant' },
+  ops = {
+    {0x01,'NAME'}, {0x02,'TYPE'}, {0x04,'POS'}, {0x03,'FACING'}, {0x64}, {0x00},
+  },
+}
+
+-- skirmish_ally / skirmish_enemy : the five vanilla skirmishes (base StartCode
+-- #13242-13269, `Scharmuetzel2..8`): one DefPos with radius 5 and both sides placed
+-- on it, `02 type 02 item [02 item] 04 'Scharmuetzel4' 0e 46` for the king's men and
+-- `... 08 46` for the orcs. Guard mode 46 on both sides, so they fight on the spot
+-- (0e 46 = ally class 7, 08 46 = monster class 0xE). NAME and GROUP are optional;
+-- with them the shape is DeMordrey's Sharuka (`01 11 02 02 [02] 04 0e 46`, #14941).
+-- Use NPCo.skirmish (npcobj), which declares the position first.
+M.templates['skirmish_ally'] = {
+  archetype = 'skirmish_ally',
+  vanilla_count = 23,
+  src_offset = 0x074e71,
+  top_types = { 'Royal Pioneer', 'Fealtybound Knight' },
+  ops = {
+    {0x01,'NAME'}, {0x11,'GROUP'}, {0x02,'TYPE'}, {0x02,'ITEMS'}, {0x04,'POS'}, {0x0e}, {0x46}, {0x00},
+  },
+}
+M.templates['skirmish_enemy'] = {
+  archetype = 'skirmish_enemy',
+  vanilla_count = 25,
+  src_offset = 0x074e71,
+  top_types = { 'Orc Warrior', 'Goblin Warrior', 'Morgwath of the Dark Elves' },
+  ops = {
+    {0x01,'NAME'}, {0x11,'GROUP'}, {0x02,'TYPE'}, {0x02,'ITEMS'}, {0x04,'POS'}, {0x08}, {0x46}, {0x00},
   },
 }
 
@@ -311,6 +356,10 @@ function M.build(name, opts)
       if opts.sub_id then p[#p+1] = u8(0x02) .. le32(opts.sub_id) end
     elseif tag == 'WEAPON' then
       if opts.weapon then p[#p+1] = u8(0x02) .. le32(opts.weapon) end
+    elseif tag == 'ITEMS' then                -- every item as its own op 02 (opts.items, or opts.weapon)
+      for _, it in ipairs(opts.items or { opts.weapon }) do p[#p+1] = u8(0x02) .. le32(it) end
+    elseif tag == 'MOUNTLEVEL' then          -- op 0x90: i32, 1 when not given
+      p[#p+1] = u8(0x90) .. le32(opts.level or 1)
     elseif tag == 'NAME' then
       if opts.name then p[#p+1] = u8(0x01) .. cstr(opts.name) end
     elseif tag == 'LINK' then

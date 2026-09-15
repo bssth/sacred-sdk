@@ -205,6 +205,22 @@ Vb.ST.no_node = "\10" .. string.pack("<I2", 0)
 -- there, now and then; a teleport of a creature outside the party does not move
 -- its home. 398 vanilla records.
 function Vb.ST.anchor(x, y, level) return "\77" .. u32(x) .. u32(y) .. u32(level or 0) end
+-- Op 0x63: this horse is for sale by the horse dealer `dealer` (his spawn name,
+-- "res:<KEY>"); vanilla adds Vb.ST.level after it (1, 2 in the base game, 3..40 in
+-- the addon). `01 'res:17400' 63 'res:17325' 1f 1` (base StartCode #1481).
+function Vb.ST.sold_by(dealer) return "\99" .. dealer .. "\0" end
+
+-- DefPos (tag 0x17): the named position `pos_name` at x, y. With `radius` >= 1 every
+-- use scatters the point over [x-r, x+r] x [y-r, y+r] onto a walkable cell (the
+-- engine retries 10 times); `z` is the level. Declaring a name again moves that
+-- entry in place, it never adds a second one (startcode.py). Vanilla:
+-- `17 | 01 'Scharmuetzel2' 0b 4877 0b 2905 0b 5` (StartCode #13237).
+function Vb.def_pos(pos_name, x, y, radius, z)
+  local b = "\0" .. name(pos_name) .. "\11" .. i32(x) .. "\11" .. i32(y)
+  if radius or z then b = b .. "\11" .. i32(radius or 0) end
+  if z then b = b .. "\11" .. i32(z) end
+  return rec(0x17, b)
+end
 
 -- SetNPCState (tag 0x03): state ops (Vb.ST) for creature `who`; a name the
 -- engine cannot resolve does nothing. A hook replaces the creature's earlier

@@ -567,19 +567,36 @@ end
 -- marker, +0x4c bound creature) and a savegame may already carry our node.
 local QM = 0x00AACF80
 
+-- A matcher for an engine string equal to `s`, compared up to and including its
+-- NUL only: the engine often strcpy's a name into an uninitialised buffer, so the
+-- bytes after the NUL are whatever was there (DefPos entries; LIVE 2026-09-16).
+local function name_matcher(s)
+  local bytes = s .. "\0"
+  local words, masks = {}, {}
+  for k = 1, #bytes, 4 do
+    local chunk = bytes:sub(k, k + 3)
+    local n = #chunk
+    words[#words + 1] = string.unpack("<I4", chunk .. string.rep("\0", 4 - n))
+    masks[#masks + 1] = n == 4 and 0xFFFFFFFF or ((1 << (8 * n)) - 1)
+  end
+  return function(peek, p)
+    for k = 1, #words do
+      local v = peek(p + (k - 1) * 4)
+      if not v or (v & masks[k]) ~= words[k] then return false end
+    end
+    return true
+  end
+end
+
 -- Index of the entry named `node`, or nil.
 function M.node_index(node)
   local peek = sacred.peek_u32
   if not peek then return nil end
   local b, e = peek(QM + 0x755C), peek(QM + 0x7560)
   if not b or not e or b == 0 or e < b then return nil end
-  local bytes = node .. string.rep("\0", 4 - #node % 4)   -- the NUL is compared too
-  local words = {}
-  for k = 1, #bytes, 4 do words[#words + 1] = string.unpack("<I4", bytes, k) end
+  local match = name_matcher(node)
   for i = 0, (e - b) // 0x50 - 1 do
-    local p, k = b + i * 0x50 + 4, 1
-    while k <= #words and peek(p + (k - 1) * 4) == words[k] do k = k + 1 end
-    if k > #words then return i end
+    if match(peek, b + i * 0x50 + 4) then return i end
   end
   return nil
 end
@@ -598,6 +615,129 @@ function M.ensure_node(node, marker)
     sacred.log(("[node] '%s' declared"):format(node))
   end
   return nil
+end
+
+-- ── Named positions (DefPos, tag 0x17) ──────────────────────────────────────
+-- The engine's position table: a vector at qm+0x334 / +0x338 (FUN_00478780), stride
+-- 100: +0x00 0, +0x04 name[64], +0x44 X, +0x48 Y, +0x4c radius, +0x50 Z.
+-- x, y, radius of the named position, or nil.
+function M.pos_of(pos_name)
+  local peek = sacred.peek_u32
+  if not peek then return nil end
+  local b, e = peek(QM + 0x334), peek(QM + 0x338)
+  if not b or not e or b == 0 or e < b then return nil end
+  local match = name_matcher(pos_name)
+  for i = 0, (e - b) // 100 - 1 do
+    local p = b + i * 100
+    if peek(p) == 0 then
+      if match(peek, p + 4) then
+        local function s32(v) return v >= 0x80000000 and v - 0x100000000 or v end
+        return s32(peek(p + 0x44)), s32(peek(p + 0x48)), s32(peek(p + 0x4c))
+      end
+    end
+  end
+  return nil
+end
+
+-- true once the position exists at x, y; the first call in a world declares it (or
+-- moves it, if a savegame holds it elsewhere) on the next heartbeat.
+M._pos_declared = M._pos_declared or {}
+function M.ensure_pos(pos_name, x, y, radius)
+  local px, py = M.pos_of(pos_name)
+  if px == x and py == y then return true end
+  local world = require("vars").world()
+  if M._pos_declared[pos_name] ~= world then
+    M._pos_declared[pos_name] = world
+    require("actions").run(require("verbs").def_pos(pos_name, x, y, radius))
+  end
+  return false
+end
+
+-- Jobs that wait for a position: checked about once a second.
+M._pos_jobs = M._pos_jobs or {}
+local pos_t = 0
+sacred.on_tick(function()
+  if #M._pos_jobs == 0 then return end
+  pos_t = pos_t + 1
+  if pos_t < 4 then return end
+  pos_t = 0
+  local left = {}
+  for _, job in ipairs(M._pos_jobs) do
+    if M.ensure_pos(job.name, job.x, job.y, job.radius) then
+      local ok, err = pcall(job.fn)
+      if not ok then sacred.log("[pos] job for '" .. job.name .. "' failed: " .. tostring(err)) end
+    elseif (job.tries or 0) < 30 then
+      job.tries = (job.tries or 0) + 1
+      left[#left + 1] = job
+    else
+      sacred.log("[pos] '" .. job.name .. "' never appeared in the position table; job dropped")
+    end
+  end
+  M._pos_jobs = left
+end)
+
+-- ── A skirmish: two sides fighting on one spot (vanilla Scharmuetzel2..8) ──────
+-- Both sides stand in guard mode on a DefPos with a radius, so the engine scatters
+-- them over walkable cells and they fight there with no script. Each side is a list
+-- of { type = <creature>, items = { <item types> }, count = n, name = "res:<KEY>" }.
+-- The position is declared first, so the NPCs appear a heartbeat or two later;
+-- `on_ready(allies, enemies)` then gets the Npc lists. Groups (ally_group /
+-- enemy_group) let records see a side die (Vb.group_is_dead). A savegame keeps the
+-- NPCs: guard the call with a variable so a load does not add a second skirmish.
+--   NPCo.skirmish{ pos = {2513, 3228}, radius = 5,
+--     allies  = { { type = 297, items = { 1729, 1211 }, count = 2 } },
+--     enemies = { { type = 38, items = { 1741 }, count = 3 } } }
+function M.skirmish(spec)
+  local x, y = spec.pos[1], spec.pos[2]
+  local pos_name = spec.place or ("sdk_skirmish_%d_%d"):format(x, y)
+  M._pos_jobs[#M._pos_jobs + 1] = { name = pos_name, x = x, y = y, radius = spec.radius or 5,
+    fn = function()
+      local out = { allies = {}, enemies = {} }
+      for _, side in ipairs({ { "allies", "skirmish_ally", spec.ally_group },
+                              { "enemies", "skirmish_enemy", spec.enemy_group } }) do
+        for _, m in ipairs(spec[side[1]] or {}) do
+          for _ = 1, m.count or 1 do
+            local o = M.spawn_template(side[2], { type = m.type, items = m.items, name = m.name,
+                                                  group = side[3], pos = pos_name })
+            if o then out[side[1]][#out[side[1]] + 1] = o
+            else sacred.log(("[skirmish] %s type %d did not spawn"):format(side[1], m.type)) end
+          end
+        end
+      end
+      sacred.log(("[skirmish] '%s' at %d,%d: %d allies, %d enemies")
+        :format(pos_name, x, y, #out.allies, #out.enemies))
+      if spec.on_ready then spec.on_ready(out.allies, out.enemies) end
+    end }
+end
+
+-- ── A horse dealer and the horses he sells (vanilla base StartCode #1470-1482) ─
+-- The dealer is template horse_dealer (op 64); each horse is template mount, tied to
+-- him by `SetNPCState <horse> 63 <dealer> 1f <level>`. Every name must be a
+-- "res:<KEY>" registered with text.lua, since the tie finds both by name.
+--   local d, horses = NPCo.horse_dealer{ name = "res:MY_DEALER", type = 653,
+--     pos = {3360, 2513}, facing = 90,
+--     horses = { { name = "res:MY_HORSE1", type = 555, pos = {3359, 2515}, level = 1 } } }
+function M.horse_dealer(spec)
+  local d = M.spawn_template("horse_dealer", { type = spec.type or 653, name = spec.name,
+                                               pos = { spec.pos[1], spec.pos[2], 0 }, facing = spec.facing })
+  if not d then
+    sacred.log("[horses] dealer did not spawn")
+    return nil
+  end
+  local Vb, horses, ties = require "verbs", {}, {}
+  for _, h in ipairs(spec.horses or {}) do
+    local o = M.spawn_template("mount", { type = h.type or 555, name = h.name, level = h.level,
+                                          pos = { h.pos[1], h.pos[2], 0 }, facing = h.facing })
+    if o then
+      horses[#horses + 1] = o
+      ties[#ties + 1] = Vb.npc_state(h.name, Vb.ST.sold_by(spec.name), Vb.ST.level(h.level or 1))
+    else
+      sacred.log("[horses] horse " .. tostring(h.name) .. " did not spawn")
+    end
+  end
+  if #ties > 0 then require("actions").run(table.concat(ties)) end
+  sacred.log(("[horses] dealer %s h=%d with %d horses"):format(spec.name, d:handle(), #horses))
+  return d, horses
 end
 
 -- Bind this runtime spawn as a REAL dialog/quest NPC: creates the engine
