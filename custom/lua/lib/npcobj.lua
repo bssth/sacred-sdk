@@ -559,6 +559,47 @@ function Npc:equip(item_type, slot)
   return sacred.npc_equip(self._h, item_type, slot or 0x0D)
 end
 
+-- ── Dialog nodes the vanilla way (DlgNPC declaration + CreateNPC op 09) ──────
+-- Vanilla declares a node in StartCode (tag 0x28) and binds it in the NPC's own
+-- CreateNPC record (`09 <node>`, 344 of 344 name a declared node); the engine
+-- then makes the same three writes bind_quest does by hand. The table lives at
+-- qm+0x755C (stride 0x50: +0x00 handle, +0x04 name[64], +0x44 section, +0x48
+-- marker, +0x4c bound creature) and a savegame may already carry our node.
+local QM = 0x00AACF80
+
+-- Index of the entry named `node`, or nil.
+function M.node_index(node)
+  local peek = sacred.peek_u32
+  if not peek then return nil end
+  local b, e = peek(QM + 0x755C), peek(QM + 0x7560)
+  if not b or not e or b == 0 or e < b then return nil end
+  local bytes = node .. string.rep("\0", 4 - #node % 4)   -- the NUL is compared too
+  local words = {}
+  for k = 1, #bytes, 4 do words[#words + 1] = string.unpack("<I4", bytes, k) end
+  for i = 0, (e - b) // 0x50 - 1 do
+    local p, k = b + i * 0x50 + 4, 1
+    while k <= #words and peek(p + (k - 1) * 4) == words[k] do k = k + 1 end
+    if k > #words then return i end
+  end
+  return nil
+end
+
+-- The node's index once it exists. The first call for a missing node declares it
+-- (Vb.declare_node, `marker` 13 = no glyph) on the next heartbeat and returns nil:
+-- call again on a later tick, then spawn with `link = node`.
+M._declared = M._declared or {}
+function M.ensure_node(node, marker)
+  local i = M.node_index(node)
+  if i then return i end
+  local world = require("vars").world()
+  if M._declared[node] ~= world then            -- once per world
+    M._declared[node] = world
+    require("actions").run(require("verbs").declare_node(node, marker))
+    sacred.log(("[node] '%s' declared"):format(node))
+  end
+  return nil
+end
+
 -- Bind this runtime spawn as a REAL dialog/quest NPC: creates the engine
 -- DlgNPC entry (the thing pure spawns lack) so the custom name shows AND
 -- the overhead quest marker draws. Returns the DlgNPC index or nil.

@@ -19,9 +19,12 @@
 --                        CreateNPC table): vanilla's awake fighters carry 1729 sword x95,
 --                        1712 dagger x80, 1724 bastard sword x52 (hole: opts.weapon)
 --   {0x01,'NAME'}        unique name cstr  (hole: opts.name)
---   {0x04,'POS'}         position: i32 -2 + ASCIIZ (hole: opts.pos)
+--   {0x04,'POS'}         position: i32 -2 + ASCIIZ, or {x, y[, z]} cells as three
+--                        i32 (vanilla `04 3225 2768 0`) (hole: opts.pos)
 --   {0x04,'POSI'}        position: numeric vx i32 (hole: opts.pos #)
 --   {0x03,'LEVEL'}       level/orientation u16 (hole: opts.level)
+--   {0x03,'FACING'}      facing in degrees u16 -- op 03 is the facing, not a level
+--                        (MECHANICS 2.13); absent = random (hole: opts.facing)
 --   {0x11,'GROUP'}       team/group id i32 (hole: opts.group)
 --   {0x09,'LINK'}        link existing dlg NPC by name (hole)
 --   {op}                 bare flag/side opcode, literal (no hole)
@@ -110,6 +113,25 @@ M.templates['named_guard'] = {
   top_types = { 'Dark Elven Zhur-Urkahi' },
   ops = {
     {0x01,'NAME'}, {0x02,'TYPE'}, {0x04,'POS'}, {0x02,'WEAPON'}, {0x08}, {0x12}, {0x00},
+  },
+}
+
+-- talk_guard : a guard you can talk to, Sergeant Flavius' record 1:1 (base:VAMPIRELADY
+-- StartCode #13319): 01 'res:17460' 02 286 02 1729 04 3225 2768 0 03 45
+-- 09 'ausregionwill' 46 0e 6b 1. Op 46 is the guard mode (+0x1F4 0x4000: it walks
+-- about its home, goes for a target within 500, carries a torch at night), 0e with it
+-- makes CreateNPC itself give the ally class 7, 6b 1 = +0x2B7 bit 8, and 09 binds the
+-- DlgNPC node (declare it first) in the same record. No wake, no stance, no home
+-- record after it: the engine does the rest. All 17 talkable guards in the corpus are
+-- 46 0e; no talkable NPC at all is 08. Give pos as {x, y} so it is born at its post.
+M.templates['talk_guard'] = {
+  archetype = 'talk_guard',
+  vanilla_count = 17,
+  src_offset = 0x07595e,
+  top_types = { 'Valorian Swordsman' },
+  ops = {
+    {0x01,'NAME'}, {0x02,'TYPE'}, {0x02,'WEAPON'}, {0x04,'POS'}, {0x03,'FACING'},
+    {0x09,'LINK'}, {0x46}, {0x0e}, {0x6b,'#u16',1}, {0x00},
   },
 }
 
@@ -297,6 +319,8 @@ function M.build(name, opts)
       local pos = opts.pos or "CPOS:HERO"
       if type(pos) == "number" then
         p[#p+1] = u8(0x04) .. le32(pos)
+      elseif type(pos) == "table" then
+        p[#p+1] = u8(0x04) .. le32(pos[1]) .. le32(pos[2]) .. le32(pos[3] or 0)
       else
         p[#p+1] = u8(0x04) .. le32(-2) .. cstr(pos)
       end
@@ -305,6 +329,8 @@ function M.build(name, opts)
       p[#p+1] = u8(0x04) .. le32(pos)
     elseif tag == 'LEVEL' then
       if opts.level then p[#p+1] = u8(0x03) .. le16(opts.level) end
+    elseif tag == 'FACING' then
+      if opts.facing then p[#p+1] = u8(0x03) .. le16(opts.facing) end
     elseif tag == 'GROUP' then
       if opts.group then p[#p+1] = u8(0x11) .. le32(opts.group) end
     elseif tag == 'HOOK' then                -- op 0x05: the section run when it dies
