@@ -17,10 +17,11 @@
 --              grepping every quest token across all 8 FunkCode files.
 --   * `name` — human-readable display name.
 --
--- Note: there is NO 9th-class slot — all 8 mask bits are taken (Ascaron
--- used 64/128 for the Underworld DLC classes). A mod can *replace/
--- repurpose* one of these 8 slots, but cannot add a new one. See
--- the SDK's RE notes on class mods (wiki: Reverse-Engineering).
+-- Note: a mod can *replace/repurpose* one of these 8 slots
+-- (lib/classmod.lua), not add a 9th: the exe has per-class switch tables,
+-- an 8-slot class-select table and fixed 8-class Balance tables. (The
+-- engine's own class mask is 32-bit, Dwarf/Daemon = 0x400000/0x800000;
+-- the `bit` values here are the SDK's compact numbering.)
 --
 -- Usage:
 --   local C = require "classes"
