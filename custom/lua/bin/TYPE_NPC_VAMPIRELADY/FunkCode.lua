@@ -808,7 +808,9 @@ do
   local BLADELOK_TYPE     = 2
   local BLADELOK_FALLBACK = 689
   local BLADELOK_SWORD    = 1724             -- TYPE_WEAPON_SWORD_BASTARD
-  local BLADELOK_HOME     = { 3226, 2763 }   -- he hangs around here (his home, Vb.ST.anchor)
+  local BLADELOK_HOME     = { 3226, 2763 }   -- he hangs around here: born here, so it is his home
+  local BLADELOK_FACING   = 45               -- Flavius' facing
+  local BLADELOK_NODE     = "sdk98_bladelok" -- his DlgNPC node (the first versions bound "Bladelok")
   local REACH        = 20                    -- arrive-at-point radius, tiles
   local NEAR_SPAWN   = 100                   -- place far NPCs once the hero is this close
 
@@ -1362,39 +1364,73 @@ do
   end
 
   -- ---- 13 -> 16: the road east, Bladelok and the horse -------------------------------
-  -- Bladelok hangs around BLADELOK_HOME and fights what comes near. He is made the
-  -- way vanilla makes its soldiers: a named awake fighter (template named_guard,
-  -- side 08 + wake 12, the sword as CreateNPC's equipment op 02), then the scene
-  -- guards' recipe -- ally stance 7, and one WakeUp once he stands at home. The
-  -- first version was a quest_npc (side off, 0e): LIVE, he just stood and turned
-  -- to watch the hero. His home keeps him near the spot; the HP keeper keeps the
-  -- road from losing him. Talking to him changes nothing in the quest.
-  local BLADELOK_LAYOUT = 2                  -- SDKQ_98_BLV: 2 = the fighter
+  -- Bladelok hangs around BLADELOK_HOME, fights what comes near and can be talked
+  -- to. He is made exactly like vanilla's Sergeant Flavius (StartCode #13319), who
+  -- stands 5 tiles from here: template talk_guard, one CreateNPC record born at the
+  -- post with the guard mode 46, side off 0e, 6b 1 and his dialog node bound by op
+  -- 09 -- and nothing after it. Versions 1 (a quest_npc, 0e: stood and watched the
+  -- hero) and 2 (08 12 + stance 7 + home record + wake + bind_quest: a hostile-born
+  -- fighter with no AI mode, a shape vanilla never makes talkable) are replaced.
+  -- Talking to him changes nothing in the quest.
+  local BLADELOK_LAYOUT = 3                  -- SDKQ_98_BLV: 3 = Flavius' shape
 
   local function arm_bladelok(o)
-    o._res, o._name = "res:BLADELOK_NAME", "Bladelok"
-    o:bind_quest("Bladelok", false)
-    o:say("BLADELOK_TALK")
+    o._res, o._name = "res:BLADELOK_NAME", BLADELOK_NODE
     o:dialog{ text = "BLADELOK_TALK",
       buttons = { { label = "res:1024", on = function()
         sacred.log("[Q2] Bladelok told us about Crow's Rock")
       end } } }
     Q2.bladelok = o
-    if SCENE_NPCS then SCENE_NPCS[#SCENE_NPCS + 1] = o end   -- HP keeper
+    Q2.bladelok_probe = 0
   end
 
-  local function spawn_bladelok()
+  -- The engine clears the AI mode of some creature types on their first ticks
+  -- (FUN_004ee030, FUN_004266f0); Bladelok is a hero model (type 2), so read
+  -- whether the guard bit 0x4000 is still there a few seconds after he appears.
+  local function probe_bladelok()
+    local o = Q2.bladelok
+    local a = o and sacred.npc_ai and sacred.npc_ai(o:handle())
+    if not a then return end
+    local x, y = o:pos()
+    sacred.log(("[Q2] Bladelok h=%d AI: +0x1F4=%08X (guard 0x4000 %s) +0x1F0=%d state=%d at %s,%s")
+      :format(o:handle(), a.f1f4, (a.f1f4 & 0x4000) ~= 0 and "on" or "GONE", a.f1f0,
+              a.state, tostring(x), tostring(y)))
+  end
+
+  -- Returns the Npc, or nil while his node is still being declared (Q2.bladelok_wait:
+  -- the tick calls again).
+  local function bladelok_up()
+    Q2.bladelok_wait = nil
+    local o = adopt("SDKQ_98_HBL", BLADELOK_TYPE, "res:BLADELOK_NAME", "Bladelok")
+           or adopt("SDKQ_98_HBL", BLADELOK_FALLBACK, "res:BLADELOK_NAME", "Bladelok")
+    local layout = V.get("SDKQ_98_BLV", 1)
+    if o and layout < BLADELOK_LAYOUT then
+      sacred.log(("[Q2] Bladelok of version %d: replaced by Flavius' shape"):format(layout))
+      o:despawn()
+      V.set("SDKQ_98_HBL", 0)                -- a call while the node waits must not adopt him again
+      o = nil
+    end
+    if not NPCo.ensure_node(BLADELOK_NODE) then
+      Q2.bladelok_wait = true
+      return nil
+    end
+    if o then
+      -- A savegame brings him back; bind the node again the vanilla way
+      -- (SetNPCState 09) in case the loaded table lost the binding.
+      Act.run(Vb.npc_state("res:BLADELOK_NAME", Vb.ST.node(BLADELOK_NODE)))
+      arm_bladelok(o)
+      return o
+    end
     for _, kind in ipairs({ BLADELOK_TYPE, BLADELOK_FALLBACK }) do
-      local o = NPCo.spawn_template("named_guard",
-        { type = kind, pos = "CPOS:HERO", name = "res:BLADELOK_NAME", weapon = BLADELOK_SWORD })
+      o = NPCo.spawn_template("talk_guard",
+        { type = kind, pos = { BLADELOK_HOME[1], BLADELOK_HOME[2], 0 }, name = "res:BLADELOK_NAME",
+          weapon = BLADELOK_SWORD, facing = BLADELOK_FACING, link = BLADELOK_NODE })
       if o then
-        o:stance(1, 7)                       -- ally: fights monsters, never the hero
-        o:place(BLADELOK_HOME[1], BLADELOK_HOME[2])
-        o:wake()
         V.set("SDKQ_98_HBL", o:handle())
         V.set("SDKQ_98_BLV", BLADELOK_LAYOUT)
-        sacred.log(("[Q2] Bladelok h=%d (type %d) at %d,%d, a fighter")
+        sacred.log(("[Q2] Bladelok h=%d (type %d) born at %d,%d, Flavius' shape")
           :format(o:handle(), kind, BLADELOK_HOME[1], BLADELOK_HOME[2]))
+        arm_bladelok(o)
         return o
       end
     end
@@ -1404,19 +1440,7 @@ do
 
   local function spawn_road_extras()
     Q2.road = true
-    local o = adopt("SDKQ_98_HBL", BLADELOK_TYPE, "res:BLADELOK_NAME", "Bladelok")
-           or adopt("SDKQ_98_HBL", BLADELOK_FALLBACK, "res:BLADELOK_NAME", "Bladelok")
-    if o and V.get("SDKQ_98_BLV", 1) < BLADELOK_LAYOUT then
-      sacred.log("[Q2] Bladelok of the first version (a standing quest_npc): replaced by the fighter")
-      o:despawn()
-      o = nil
-    end
-    if o then
-      o:home(BLADELOK_HOME[1], BLADELOK_HOME[2])
-    else
-      o = spawn_bladelok()
-    end
-    if o then arm_bladelok(o) end
+    bladelok_up()
 
     local h = adopt("SDKQ_98_HHO", HORSE_TYPE, nil, nil)
     if not h then
@@ -1603,6 +1627,13 @@ do
     Q2.t = (Q2.t or 0) + 1
     if Q2.t % 8 ~= 0 then return end         -- every ~2 s
     local s = Q2.state
+
+    -- Bladelok: spawn him once his node is declared; read his AI word at once and after ~6 s.
+    if Q2.bladelok_wait then bladelok_up() end
+    if Q2.bladelok_probe then
+      if Q2.bladelok_probe == 0 or Q2.bladelok_probe == 3 then probe_bladelok() end
+      Q2.bladelok_probe = Q2.bladelok_probe < 3 and Q2.bladelok_probe + 1 or nil
+    end
 
     -- Slayer's answer: its OK starts his walk; a window closed some other way
     -- does not, so he goes by himself after a minute.
