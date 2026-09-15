@@ -87,13 +87,21 @@ void install();
 bool revert(const char* key);
 void revert_all();
 
-// Re-read live bytes at every site and classify them. For the overlay button.
-void verify_live();
+// Re-read live bytes at every site and classify them. For the overlay button
+// and the `sdk verify` console command.
+struct VerifyResult { int original, patched, unexpected; };
+VerifyResult verify_live();
 
 void        draw_panel();
 const char* status();
 int         applied_count();
 int         skipped_count();
 int         failed_count();
+
+// Read-only view of the per-record state, for surfaces other than the overlay.
+// Valid after install(); `detail` is empty for a record that is simply off.
+struct RecordInfo { const char* key; const char* name; St st; const char* detail; };
+int  record_count();
+bool record_at(int i, RecordInfo* out);
 
 }} // namespace sdk::patchset

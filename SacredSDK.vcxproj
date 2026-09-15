@@ -166,6 +166,7 @@
     <ClCompile Include="engine\hero.cpp" />
     <ClCompile Include="engine\debug.cpp" />
     <ClCompile Include="engine\build_profile.cpp" />
+    <ClCompile Include="engine\console.cpp" />
     <ClCompile Include="core\config.cpp" />
     <ClCompile Include="patchset\patchset.cpp" />
     <ClCompile Include="patches.cpp" />

@@ -15,6 +15,7 @@
 #include "sdk.h"
 #include "engine/build_profile.h"
 #include "patchset/patchset.h"
+#include "engine/console.h"
 #include "core/config.h"
 #include <cmath>
 #include <cstdio>
@@ -153,6 +154,8 @@ static DWORD WINAPI worker(LPVOID) {
         // full-length `expect` check catches any overlap instead of both
         // writing the same bytes blind.
         patchset::install();
+        // `sdk ...` commands in the game's own console (dispatcher detour).
+        engine::console::install();
         text_logger::install();
         // sacred_log_mirror::install();  // still disabled (needs SuspendThread)
         // Engine trigger/dialog hooks: (re)install here too, AFTER decryption.

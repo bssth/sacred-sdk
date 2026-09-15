@@ -98,6 +98,15 @@ int         applied_count() { return g_applied; }
 int         skipped_count() { return g_skipped; }
 int         failed_count()  { return g_failed; }
 
+int record_count() { return g_rs_n; }
+
+bool record_at(int i, RecordInfo* out) {
+    if (!out || i < 0 || i >= g_rs_n) return false;
+    const RecState& rs = g_rs[i];
+    *out = RecordInfo{ rs.rec->key, rs.rec->name, rs.st, rs.detail };
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 //  RWX cave. One reservation for every stub, instead of one VirtualAlloc per
 //  hook. In a 32-bit process every user address is < 2 GB, so an E9 rel32 from
@@ -506,7 +515,7 @@ void revert_all() {
 //  Live verification — the cheap in-game half of the regression oracle. The
 //  other half is diffing logs/text_dump.bin against logs/text_dump_post.bin.
 // ---------------------------------------------------------------------------
-void verify_live() {
+VerifyResult verify_live() {
     const uintptr_t reb = engine::build::rebase();
     int as_expect = 0, as_ours = 0, other = 0;
     for (int i = 0; i < g_rs_n; ++i) {
@@ -526,6 +535,7 @@ void verify_live() {
     }
     sdk_log("[patchset] verify: %d original, %d patched, %d unexpected",
             as_expect, as_ours, other);
+    return VerifyResult{ as_expect, as_ours, other };
 }
 
 
