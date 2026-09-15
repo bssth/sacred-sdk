@@ -28,6 +28,9 @@ and caches its own scans under `_cache/` (delete that dir after re-exporting).
 | `writes.py <disp>` | only the *writes* to a struct field |
 | `npc_records.py` | authoritative `CreateNPC` (FunkCode tag 0x01) record decoder. Field widths come from the interpreter switch in `FUN_00472bc0`; decodes **99.99 %** of the 64 246 vanilla records byte-exactly. Also handles the `9F EF BE ED FE <name>NUL` symref token (`FUN_00453970`) |
 | `npc_flag_corpus.py` | correlates every CreateNPC flag opcode with creature types/bands over all `bin/*/FunkCode.bin` + `StartCode.bin` (deduped by md5) |
+| `buildmap.py` | address correspondence between our build and another Sacred build (SacredReborn.exe): STEP-64 delta map of masked signatures, cached in `_cache/`; `old2new`/`new2old` answer only inside a run (no extrapolation), `locate_old`/`locate_new` prove an address with byte context around a patched span |
+| `reloc_build.py` | ports the SDK's engine VAs to another build on top of `buildmap` (signature + call-site votes for code, operand votes for data) → `sdk/re/reborn_symbols.json` |
+| `reborn_catalog.py` | enumerates ReBorn's code patches (branches into its .rdata stub cave and .rsrc code tail, run-time writes into .text operands), locates each in our build by bytes or by instruction shape, walks every stub. Output `sdk/re/hd_table.gen.json` + `sdk/re/patch_review_queue.md` holds ReBorn's disassembly, so both are **gitignored** |
 | `balance_keys.py` | extracts the balance key → live global-variable table out of the native parser `FUN_005eb010` (227 named floats/ints at `0x00AD4490..0x00AD55A8`) |
 
 ## Ghidra side (`sdk/re/ghidra/`)
