@@ -20,7 +20,14 @@
 -- reveal the real start-teleport coordinate space if (2796,2261) lands
 -- wrong — we then feed coords in that space.
 local SPAWN = true    -- normal: teleport hero to the captain scene.
-local HIDE  = true    -- normal: suppress vanilla quests.
+-- NO_VANILLA_QUESTS (GLOBAL: StartCode.lua, baked after this file, reads it too):
+-- every vanilla SetUpQuest in FunkCode.bin and StartCode.bin becomes a same-size
+-- NOP (lib/novanilla.lua), so no vanilla quest is ever set up and every section a
+-- quest owns stays inert. New games only. HIDE (the journal-builder hook that hid
+-- vanilla quests which still ran) is off while this is tested, so the journal
+-- shows what is really left.
+NO_VANILLA_QUESTS = (NO_VANILLA_QUESTS ~= false)
+local HIDE  = not NO_VANILLA_QUESTS
 -- (Bake-time CreateNPC injection is structurally impossible: a mid-stream
 -- insert breaks the byte-counted IF/ELSE jumps and a tail append never
 -- dispatches. Every NPC here is created at RUNTIME.)
@@ -1894,6 +1901,12 @@ PROBE_S0B = (PROBE_S0B == true)   -- S0b done 2026-09-11 (LIVE_S0_RESULTS.md 1b)
 if PROBE_S0B then
   local ok, err = pcall(require, "probe_s0b")
   if not ok then sacred.log("[s0b] probe module failed to load: " .. tostring(err)) end
+end
+
+if NO_VANILLA_QUESTS then
+  local NV = require "novanilla"
+  NV.strip(recs, "FunkCode")
+  NV.keep_markers_hidden()               -- the givers of stripped quests keep their "!" otherwise
 end
 
 return recs
