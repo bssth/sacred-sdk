@@ -28,7 +28,7 @@ Expected bytes always come out of OUR Sacred_decrypted.exe. Sites are grouped
 into one record per function of ours, because a half-patched function draws a
 torn frame and the patch engine applies a record atomically.
 """
-import os, json, struct, collections
+import os, re, json, struct, collections
 from capstone import Cs, CS_ARCH_X86, CS_MODE_32
 from capstone import x86 as X
 import buildmap as bm
@@ -45,51 +45,33 @@ MD.detail = True
 
 SLOTS = (0x00A1EF00, 0x00A1F100)
 IMAGE = (0x00400000, 0x01E00000)
-OPWRITE_FIX = {("mov", 4): "Imm32GeomSet", ("add", 4): "Imm32GeomAdd", ("add", 2): "Imm16GeomAdd",
-               ("mov", 2): "Imm16GeomSet"}
 
 
 def is_slot(v):
     return SLOTS[0] <= v < SLOTS[1]
 
 
-def slots_at_native():
-    """Slot address -> raw bytes at 1024x768, mirroring hd/geometry.cpp.
+NATIVE = {}   # slot VA -> 8 raw bytes at 1024x768, filled by native_slots() from the emulator
 
-    Only a filter: at the native size every slot must equal the constant the
-    engine was compiled with, so a site whose original operand differs is a
-    mislocated site or a behaviour change of ReBorn's, and is dropped here one
-    site at a time. The patch engine repeats the check on the real values and
-    refuses a whole record if this mirror ever drifts from the C++.
+
+def native_slots(reb):
+    """Every slot's bytes at 1024x768, straight from running ReBorn's init.
+
+    At the native size every layout value must equal the constant the engine
+    was compiled with, so a site whose original operand differs from its slot
+    here is a mislocated site or a behaviour change of ReBorn's, and is dropped
+    one site at a time. The patch engine repeats the check on our C++ values.
     """
-    W, H = 1024, 768
-    hw, hh, ox, oy = W >> 1, H >> 1, 0, 0
-    f = lambda v: struct.pack("<f", v)
-    i = lambda v: struct.pack("<i", v)
-    dbl = lambda v: struct.pack("<d", v)
-    sx, sy = 267.0 * W / 1024.0, 200.0 * H / 768.0
-    t = {
-        0xA1EFD0: i(W), 0xA1EFD4: i(H), 0xA1EFD8: i(hw), 0xA1EFDC: i(hh),
-        0xA1F020: i(-hw), 0xA1F024: i(-hh), 0xA1F078: i(-W), 0xA1F0C0: i(-H),
-        0xA1EFE0: f(W), 0xA1EFE4: f(H), 0xA1EFE8: f(hw), 0xA1EFEC: f(hh),
-        0xA1EFF0: f(-hw), 0xA1EFF4: f(-hh),
-        0xA1EFF8: f(sx), 0xA1EFFC: f(-sx), 0xA1F000: f(sy), 0xA1F004: f(-sy),
-        0xA1F010: dbl(sx), 0xA1F018: dbl(-sx), 0xA1F0A0: dbl(sy), 0xA1F0A8: dbl(-sy),
-        0xA1F008: f(1.0 / W), 0xA1F0B0: f(1.0 / H), 0xA1EFC4: f(1.0), 0xA1EFC8: f(1.0),
-        0xA1F00C: i(W + 200), 0xA1F0CC: i(H + 200),
-        0xA1F054: i(ox), 0xA1F050: f(ox), 0xA1F0BC: i(oy), 0xA1F0B8: f(oy),
-        0xA1F05C: f(501.0), 0xA1F060: f(522.0), 0xA1F058: i(162), 0xA1F064: i(170),
-        0xA1F080: f(1024.0), 0xA1F07C: f(W - 70.0), 0xA1F070: i(W - 1), 0xA1F074: i(H - 1),
-        0xA1F068: i(W - 92), 0xA1F06C: i(W - 126), 0xA1F098: f(H + 50.0),
-        0xA1EFA8: i(105), 0xA1EFAC: i(700), 0xA1F0C4: f(379.0), 0xA1F0C8: f(389.0),
-        0xA1EF68: f(hw + 1.0), 0xA1EF60: f(H - 58.0), 0xA1EF64: f(H - 57.0),
-        0xA1EF50: i(W - 32), 0xA1EF54: i(H - 32), 0xA1EF58: i(400), 0xA1EF5C: i(680),
-        0xA1F0D4: f(710.0), 0xA1EF44: f(0.5), 0xA1EF48: f(1.0), 0xA1EF4C: f(2.0),
-    }
-    return t
-
-
-NATIVE = slots_at_native()
+    import reborn_init_emu as emu
+    out, _ = emu.run(1024, 768, reb)
+    out.update(sdk_slots(1024, 768))
+    byte = {}
+    for a, v in out.items():
+        for k, x in enumerate(v):
+            byte[a + k] = x
+    NATIVE.clear()
+    for s in range(SLOTS[0], 0xA1F114):
+        NATIVE[s] = bytes(byte[s + k] if s + k in byte else (reb.rd(s + k, 1) or b"\0")[0] for k in range(8))
 
 
 def native_ok(slot, original):
@@ -329,63 +311,142 @@ def relocate(ours, reb, mp, row, body):
 
 
 # ---------------------------------------------------------------------------
+#  Operand writes, from running ReBorn's init at several sizes
+# ---------------------------------------------------------------------------
+PROBE_SIZES = [(1024, 768), (1366, 768), (1600, 900), (1920, 1080), (2560, 1440), (1280, 1024), (1280, 720)]
+
+# Slots that are ours, not ReBorn's: values its init computes inline on the
+# x87 stack and writes straight into operands. Must match hd/geometry.h.
+def sdk_slots(W, H):
+    rnd = lambda v: int(round(v))                      # nearest-even, like nearbyint
+    i = lambda v: struct.pack("<i", v)
+    ox, oy = (W - 1024) >> 1, (H - 768) >> 1
+    return {0xA1F100: i(rnd(W / 1024.0 * 256.0)),     # kSlotTile256W
+            0xA1F104: i(rnd(H / 768.0 * 256.0)),      # kSlotTile256H
+            0xA1F108: i(4 * W * H),                   # kSlotPixels4
+            0xA1F10C: i(2 * ox),                      # kSlotOffX2
+            0xA1F110: i(2 * oy)}                      # kSlotOffY2
+
+
+def emulated_targets(reb):
+    """Every .text address ReBorn's init writes, and the layout value it receives.
+
+    Returns {reborn_va: dict(width, orig, kind, slot)} for matched targets and a
+    list of (reborn_va, why) for the rest. `kind` is "set" or "add": the target
+    equals a slot, or its original operand plus a slot, at every probe size.
+    """
+    import reborn_init_emu as emu
+    runs, writers = {}, {}
+    for r in PROBE_SIZES:
+        out, _ = emu.run(*r, reb)
+        out.update(sdk_slots(*r))
+        runs[r] = out
+        writers.update(emu.run.last_writers)
+    slots = sorted({a for o in runs.values() for a in o if SLOTS[0] <= a < 0xA1F114})
+    texts = sorted({a for o in runs.values() for a in o if reb.in_text(a)})
+
+    def val(r, a, n):
+        v = runs[r].get(a)
+        return v[:n] if v is not None and len(v) >= n else reb.rd(a, n)
+
+    found, missing = {}, []
+    for t in texts:
+        w = max(len(runs[r].get(t, b"")) for r in PROBE_SIZES)
+        orig = reb.rd(t, w)
+        mask = (1 << (8 * w)) - 1
+        sets = [s for s in slots if all(val(r, t, w) == val(r, s, w) for r in PROBE_SIZES)]
+        adds = [s for s in slots if all(
+            val(r, t, w) == ((int.from_bytes(orig, "little", signed=True) +
+                              int.from_bytes(val(r, s, 4), "little", signed=True)) & mask).to_bytes(w, "little")
+            for r in PROBE_SIZES)]
+        wrote_by = writers.get(t, "?")
+        if wrote_by == "add" and adds:
+            found[t] = dict(width=w, orig=orig, kind="add", slot=adds[0])
+        elif sets:
+            found[t] = dict(width=w, orig=orig, kind="set", slot=sets[0])
+        elif adds:
+            found[t] = dict(width=w, orig=orig, kind="add", slot=adds[0])
+        else:
+            missing.append((t, "value is no layout slot at every probe size (conditional or new formula)"))
+    return found, missing
+
+
+# ---------------------------------------------------------------------------
 def main():
+    import scan
+    import reborn_catalog as rc
     d = json.load(open(IN_JSON, encoding="utf-8"))
+    # hd_decisions.json: {"0x<ReBorn VA>": {"verdict": "skip"|"reject", "why": "..."}}
+    #   skip   - not a layout patch (ReBorn's own infrastructure); ignored entirely
+    #   reject - a layout patch we will not port; its function stays unpatched
     decisions = {}
     if os.path.exists(DECISIONS):
-        decisions = {int(k, 0): v for k, v in json.load(open(DECISIONS, encoding="utf-8")).items()
-                     if not k.startswith("_")}
+        for k, v in json.load(open(DECISIONS, encoding="utf-8")).items():
+            if not k.startswith("_"):
+                decisions[int(k, 0)] = (v["verdict"], v.get("why", "")) if isinstance(v, dict) else (v, "")
     ours, reb, dm = bm.load()
+    native_slots(reb)
     wild = [(r["reborn_va"], r["reborn_span"]) for r in d["sites"] if r["class"] != "selfpatch"]
+    rc.WILD.clear()
+    for lo, n in wild:
+        rc.WILD.update(range(lo, lo + n))
     mp = Mapper(ours, reb, dm, wild)
 
     items = collections.defaultdict(list)   # (func, name) -> site dicts
-    rejected = []
+    rejected = []                            # (our va or None, label, why)
+    unported = []                            # (ReBorn VA, our func or None) of layout sites left out
+    located = {}                             # ReBorn VA -> our func, for every located layout site
     tally = collections.Counter()
 
+    def leave_out(reb_va, our_va, label, why, func=None):
+        rejected.append((our_va, label, why))
+        unported.append((reb_va, func))
+
     # --- 1. operand writes ----------------------------------------------------
-    for r in d["sites"]:
-        if r["class"] != "selfpatch":
+    cat_rows = {r["reborn_target"]: r for r in d["sites"] if r["class"] == "selfpatch"}
+    found, missing = emulated_targets(reb)
+    for t, why in missing:
+        if decisions.get(t, ("",))[0] != "skip":
+            leave_out(t, None, f"operand {t:#x}", why)
+    FIXKIND = {("set", 4): "Imm32GeomSet", ("set", 2): "Imm16GeomSet",
+               ("add", 4): "Imm32GeomAdd", ("add", 2): "Imm16GeomAdd"}
+    for t, f in sorted(found.items()):
+        label = f"operand {t:#x}"
+        verdict = decisions.get(t, ("", ""))
+        if verdict[0] == "skip":
             continue
-        tgt, host_s = r.get("our_target"), r.get("our_host")
-        why = None
-        if tgt is None:
-            why = f"not located ({r['located_by']})"
-        elif r["src"] != "slot":
-            why = f"value is not a layout slot ({r['src_val']})"
-        elif not r.get("field_equal"):
-            why = "our operand differs from ReBorn's original"
-        elif decisions.get(tgt) == "reject":
-            why = "rejected in hd_decisions.json"
-        if why:
-            rejected.append((tgt, "operand write", why)); continue
-        host_va = int(host_s.split(":")[0], 16)
-        ins = next(MD.disasm(ours.rd(host_va, 16), host_va), None)
-        kind = OPWRITE_FIX.get((r["writer_op"], r["writer_width"]))
-        ofs = None
-        if ins:
-            for op in ins.operands:
-                if op.type == X.X86_OP_IMM and host_va + ins.imm_offset == tgt:
-                    ofs = ins.imm_offset
-                elif abs_mem(op) and host_va + ins.disp_offset == tgt:
-                    ofs = ins.disp_offset
-        if ofs is None or kind in (None, "Imm16GeomSet"):
-            rejected.append((tgt, "operand write", f"not a patchable field of `{host_s}` "
-                                                   f"({r['writer_op']}/{r['writer_width']})"))
-            continue
-        width = 2 if kind == "Imm16GeomAdd" else 4
-        orig = ours.rd(host_va + ofs, width)
-        native = NATIVE.get(r["src_val"])
-        if kind == "Imm32GeomSet" and not native_ok(r["src_val"], orig):
-            rejected.append((tgt, "operand write", f"slot {r['src_val']:#x} is not `{host_s}`'s value at 1024x768"))
-            continue
-        if kind != "Imm32GeomSet" and (native is None or native[:4] != bytes(4)):
-            rejected.append((tgt, "operand write", f"adds slot {r['src_val']:#x}, which is not 0 at 1024x768"))
-            continue
-        items[(r["our_func"], r["our_func_name"])].append(dict(
-            va=host_va, len=ins.size, expect=ours.rd(host_va, ins.size),
-            new=ours.rd(host_va, ins.size), fx=[(ofs, kind, r["src_val"])], stub=None,
-            note=f"{ins.mnemonic} {ins.op_str}  <- {r['writer_asm']}"))
+        if verdict[0] == "reject":
+            leave_out(t, None, label, f"hd_decisions.json: {verdict[1]}"); continue
+        host = rc.host_of(reb, t)
+        if host is None:
+            leave_out(t, None, label, "no instruction holds this address"); continue
+        row = cat_rows.get(t)
+        if row and row.get("our_host") and row.get("our_target"):
+            our_host = int(row["our_host"].split(":")[0], 16)
+        else:
+            our_host, _, _ = rc.locate_site(ours, reb, dm, host.address, host.size)
+        if our_host is None:
+            leave_out(t, None, label, "not located"); continue
+        func = scan.gh_func_of(our_host)
+        name = scan.gh_name(our_host) if func is not None else None
+        located[t] = func
+        hb = reb.rd(host.address, host.size)
+        if not bm.masked_eq(ours.rd(our_host, host.size), hb, bm.mask_of(hb)):
+            leave_out(t, our_host, label, "ReBorn changed the host instruction itself", func); continue
+        ofs = t - host.address
+        ins = next(MD.disasm(ours.rd(our_host, 16), our_host), None)
+        field_ok = ins is not None and (
+            (ins.imm_size and ins.imm_offset == ofs and ins.imm_size >= f["width"]) or
+            (ins.disp_size == 4 and ins.disp_offset == ofs and f["width"] <= 4))
+        if not field_ok:
+            leave_out(t, our_host, label, "the address is not an operand field of our instruction", func); continue
+        if ours.rd(our_host + ofs, f["width"]) != f["orig"]:
+            leave_out(t, our_host, label, "our operand differs from ReBorn's original", func); continue
+        kind = FIXKIND[(f["kind"], f["width"])]
+        items[(func, name)].append(dict(
+            va=our_host, len=ins.size, expect=ours.rd(our_host, ins.size), new=ours.rd(our_host, ins.size),
+            fx=[(ofs, kind, f["slot"])], stub=None,
+            note=f"{ins.mnemonic} {ins.op_str}  <- {f['kind']} slot {f['slot']:#x}"))
         tally["operand write"] += 1
 
     # --- 2 + 3. branches into ReBorn's stubs ----------------------------------
@@ -394,31 +455,36 @@ def main():
             continue
         site, span, our = r["reborn_va"], r["reborn_span"], r["our_va"]
         label = f"{r['class']} {site:#x}"
+        verdict = decisions.get(site, ("", ""))
+        if verdict[0] == "skip":
+            continue
+        func = r.get("our_func")
+        if our is not None:
+            located[site] = func
         if our is None:
-            rejected.append((None, label, f"not located ({r['located_by']})")); continue
-        if decisions.get(our) == "reject":
-            rejected.append((our, label, "rejected in hd_decisions.json")); continue
+            leave_out(site, None, label, f"not located ({r['located_by']})"); continue
+        if verdict[0] == "reject":
+            leave_out(site, our, label, f"hd_decisions.json: {verdict[1]}", func); continue
         mine = dis(ours, our, span)
         if r["our_span"] != span or sum(i.size for i in mine) != span:
-            rejected.append((our, label, "our span does not end on an instruction boundary")); continue
+            leave_out(site, our, label, "our span does not end on an instruction boundary", func); continue
         body = stub_body(reb, r["target"])
         if body is None:
-            rejected.append((our, label, "stub has no clean end")); continue
+            leave_out(site, our, label, "stub has no clean end", func); continue
         key = (r["our_func"], r["our_func_name"])
         if r["class"] == "cave-jmp":
             red = reduce_in_place(ours, reb, mp, site, span, our, body)
             if red and red[0] == "reject":
-                rejected.append((our, label, red[1])); continue
+                leave_out(site, our, label, red[1], func); continue
             if red:
-                fx = red[1]
                 items[key].append(dict(va=our, len=span, expect=ours.rd(our, span), new=ours.rd(our, span),
-                                       fx=fx, stub=None, note=f"in place: " + " ; ".join(
+                                       fx=red[1], stub=None, note=f"in place: " + " ; ".join(
                                            f"{i.mnemonic} {i.op_str}" for i in mine)))
                 tally["stub reduced to operands"] += 1
                 continue
         got, why = relocate(ours, reb, mp, r, body)
         if got is None:
-            rejected.append((our, label, why)); continue
+            leave_out(site, our, label, why, func); continue
         blob, sfx = got
         opcode = 0xE8 if r["class"].endswith("call") else 0xE9
         new = bytes([opcode, 0, 0, 0, 0]) + b"\x90" * (span - 5)
@@ -427,6 +493,28 @@ def main():
                                note=f"{'call' if opcode == 0xE8 else 'jmp'} stub ({len(blob)} B): " +
                                     " ; ".join(f"{i.mnemonic} {i.op_str}" for i in mine)))
         tally["stub relocated"] += 1
+
+    # --- a function is patched whole or not at all ------------------------------
+    # A layout site left out makes its function inconsistent (the crash of
+    # 2026-09-16: a loop bound moved to W while its step stayed 256 walked off a
+    # 12-entry texture table). An unlocated site has no function of ours, so it
+    # is charged to the function of the nearest located site within 0x300 bytes.
+    near = sorted(located.items())
+    incomplete = {}
+    for reb_va, func in unported:
+        if func is None:
+            best = min(near, key=lambda kv: abs(kv[0] - reb_va), default=None)
+            if best and abs(best[0] - reb_va) <= 0x300:
+                func = best[1]
+        if func is not None:
+            incomplete.setdefault(func, []).append(reb_va)
+    for key in list(items):
+        if key[0] in incomplete:
+            n = len(items.pop(key))
+            rejected.append((None, f"function {key[1]}",
+                             f"dropped {n} site(s): layout sites at ReBorn " +
+                             ", ".join(f"{x:#x}" for x in incomplete[key[0]]) + " are not ported"))
+            tally["sites dropped with their function"] += n
 
     # --- emit ---------------------------------------------------------------
     out, rows = [], []
@@ -447,7 +535,8 @@ def main():
             clean.append(merged[va]); last = va + merged[va]["len"]
         if not clean:
             continue
-        tag = f"hd_{(name or 'at_%08x' % clean[0]['va']).lower()}"
+        ident = name if name and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) else f"at_{clean[0]['va']:08x}"
+        tag = f"hd_{ident.lower()}"
         nstubs = sum(1 for s in clean if s["stub"])
         out.append(f"// --- {tag}: {len(clean)} site(s), {nstubs} stub(s)")
         stub_rows, sid = [], 0

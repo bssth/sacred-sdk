@@ -36,13 +36,14 @@ enum class Fix : uint8_t {
     Imm32GeomSet,   // -> the slot's four bytes (int or float, as the operand is)
     Imm32GeomAdd,   // -> original imm32 at this offset + the slot's int32
     Imm16GeomAdd,   // -> original imm16 at this offset + the slot's int32 (2-byte field)
+    Imm16GeomSet,   // -> the slot's low 16 bits (2-byte field)
     // Relocated code that reads engine data or a constant.
     Abs32ToVA,      // arg = engine VA          -> that VA, rebased
     Abs32Const,     // arg = 4 raw bytes        -> address of a read-only copy in our DLL
 };
 
 struct Fixup {
-    uint16_t ofs;    // byte offset of the field within `bytes` (4 bytes, 2 for Imm16GeomAdd)
+    uint16_t ofs;    // byte offset of the field within `bytes` (4 bytes, 2 for Imm16Geom*)
     Fix      kind;
     uint32_t arg;
 };
@@ -112,5 +113,9 @@ int         failed_count();
 struct RecordInfo { const char* key; const char* name; St st; const char* detail; };
 int  record_count();
 bool record_at(int i, RecordInfo* out);
+
+// Which applied record owns `va` - one of its patched sites or its stubs in the
+// cave. For the crash log. False if the address is not ours.
+bool describe_address(uintptr_t va, char* buf, size_t n);
 
 }} // namespace sdk::patchset

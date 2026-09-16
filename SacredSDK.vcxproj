@@ -169,6 +169,7 @@
     <ClCompile Include="engine\console.cpp" />
     <ClCompile Include="hd\geometry.cpp" />
     <ClCompile Include="core\config.cpp" />
+    <ClCompile Include="core\crashlog.cpp" />
     <ClCompile Include="patchset\patchset.cpp" />
     <ClCompile Include="patches.cpp" />
     <ClCompile Include="text_logger.cpp" />

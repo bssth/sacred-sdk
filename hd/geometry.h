@@ -22,9 +22,16 @@
 
 namespace sdk { namespace hd {
 
-// The mirrored range, in ReBorn's addresses.
+// The mirrored range, in ReBorn's addresses. ReBorn's own table ends at
+// 0xA1F0D8; the slots from 0xA1F100 up are ours, for values ReBorn computes
+// inline on the x87 stack and writes straight into engine operands:
 constexpr uint32_t kSlotLo = 0x00A1EF40;
-constexpr uint32_t kSlotHi = 0x00A1F0E0;
+constexpr uint32_t kSlotHi = 0x00A1F114;
+constexpr uint32_t kSlotTile256W = 0x00A1F100;   // round(256 * W / 1024), x87 nearest-even
+constexpr uint32_t kSlotTile256H = 0x00A1F104;   // round(256 * H / 768)
+constexpr uint32_t kSlotPixels4  = 0x00A1F108;   // 4 * W * H, a 32-bit frame buffer size
+constexpr uint32_t kSlotOffX2    = 0x00A1F10C;   // 2 * offX, for operands ReBorn shifts twice
+constexpr uint32_t kSlotOffY2    = 0x00A1F110;   // 2 * offY
 
 // Compute every slot for W x H. Idempotent; call again to change resolution
 // (the already-applied patches keep their old values, so only do that before

@@ -60,10 +60,12 @@ void init(int w, int h) {
     // 267 and 200 are the engine's own half-extents of the play field.
     const float sx = 267.0f * fW / 1024.0f;
     const float sy = 200.0f * fH / 768.0f;
-    put_f(0xA1EFF8, sx);  put_d(0xA1F010,  (double)sx);
-    put_f(0xA1EFFC, -sx); put_d(0xA1F018, -(double)sx);
-    put_f(0xA1F000, sy);  put_d(0xA1F0A0,  (double)sy);
-    put_f(0xA1F004, -sy); put_d(0xA1F0A8, -(double)sy);
+    // The double slots keep the x87's full precision; only the float ones are
+    // rounded (200*H/768 is not a binary fraction, so the two differ).
+    put_f(0xA1EFF8, sx);  put_d(0xA1F010,  (double)W / 1024.0 * 267.0);
+    put_f(0xA1EFFC, -sx); put_d(0xA1F018, -((double)W / 1024.0 * 267.0));
+    put_f(0xA1F000, sy);  put_d(0xA1F0A0,  (double)H / 768.0 * 200.0);
+    put_f(0xA1F004, -sy); put_d(0xA1F0A8, -((double)H / 768.0 * 200.0));
 
     put_f(0xA1F008, 1.0f / fW);        put_f(0xA1F0B0, 1.0f / fH);
     put_f(0xA1EFC4, 1024.0f / fW);     put_f(0xA1EFC8, 768.0f / fH);
@@ -88,6 +90,13 @@ void init(int w, int h) {
     put_i(0xA1EF50, W - 32);           put_i(0xA1EF54, H - 32);
     put_i(0xA1EF58, 400 + offY);       put_i(0xA1EF5C, 680 + offX);
     put_f(0xA1F0D4, 710.0f + 2.0f * fOffY);
+
+    // Ours: values ReBorn computes inline and writes straight into operands.
+    put_i(kSlotTile256W, (int32_t)nearbyint((double)W / 1024.0 * 256.0));
+    put_i(kSlotTile256H, (int32_t)nearbyint((double)H / 768.0 * 256.0));
+    put_i(kSlotPixels4,  4 * W * H);
+    put_i(kSlotOffX2,    2 * offX);
+    put_i(kSlotOffY2,    2 * offY);
 
     // Camera zoom: only widened past 1366x768, and then every zoom step is
     // divided by how much wider than 4:3-at-1024 the frame got.

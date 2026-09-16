@@ -17,6 +17,7 @@
 #include "patchset/patchset.h"
 #include "engine/console.h"
 #include "hd/geometry.h"
+#include "core/crashlog.h"
 #include "core/config.h"
 #include <cmath>
 #include <cstdio>
@@ -159,6 +160,10 @@ static DWORD WINAPI worker(LPVOID) {
         patchset::install();
         // `sdk ...` commands in the game's own console (dispatcher detour).
         engine::console::install();
+        // Log engine faults with a stack scan tagged by patch record. Installed
+        // only now: nothing before decryption can fault in .text, and SecuROM's
+        // own startup never sees an extra handler.
+        crashlog::install();
         text_logger::install();
         // sacred_log_mirror::install();  // still disabled (needs SuspendThread)
         // Engine trigger/dialog hooks: (re)install here too, AFTER decryption.

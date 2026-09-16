@@ -81,6 +81,7 @@ struct RecState {
     St            st;
     char          detail[112];
     int           journal_first, journal_n;
+    uintptr_t     cave_lo, cave_hi;   // this record's stubs, for describe_address()
 };
 struct JournalEntry {
     uintptr_t addr;
@@ -102,6 +103,34 @@ int         skipped_count() { return g_skipped; }
 int         failed_count()  { return g_failed; }
 
 int record_count() { return g_rs_n; }
+
+bool describe_address(uintptr_t va, char* buf, size_t n) {
+    for (int i = 0; i < g_rs_n; ++i) {
+        const RecState& rs = g_rs[i];
+        if (rs.st != St::Applied) continue;
+        if (rs.cave_lo && va >= rs.cave_lo && va < rs.cave_hi) {
+            // stubs were allocated in order, each rounded up to 16 bytes
+            uintptr_t at = rs.cave_lo;
+            for (uint8_t k = 0; k < rs.rec->nstubs; ++k) {
+                const Stub& st = rs.rec->stubs[k];
+                uintptr_t next = at + ((st.len + 15) & ~(size_t)15);
+                if (va < next) {
+                    _snprintf_s(buf, n, _TRUNCATE, "%s stub %u +0x%x", rs.rec->key, st.id,
+                                (unsigned)(va - at));
+                    return true;
+                }
+                at = next;
+            }
+        }
+        for (int j = rs.journal_first; j < rs.journal_first + rs.journal_n && j < g_journal_n; ++j)
+            if (va >= g_journal[j].addr && va < g_journal[j].addr + g_journal[j].len) {
+                _snprintf_s(buf, n, _TRUNCATE, "%s site @%08x +0x%x", rs.rec->key,
+                            (unsigned)g_journal[j].addr, (unsigned)(va - g_journal[j].addr));
+                return true;
+            }
+    }
+    return false;
+}
 
 bool record_at(int i, RecordInfo* out) {
     if (!out || i < 0 || i >= g_rs_n) return false;
@@ -262,7 +291,8 @@ static bool resolve_fixup(const ApplyCtx& cx, const Fixup& f, uintptr_t write_at
         }
         case Fix::Imm32GeomSet:
         case Fix::Imm32GeomAdd:
-        case Fix::Imm16GeomAdd: {
+        case Fix::Imm16GeomAdd:
+        case Fix::Imm16GeomSet: {
             uint32_t slot = 0;
             if (!hd::slot_u32(f.arg, &slot)) {
                 _snprintf_s(why, why_n, _TRUNCATE, "geometry slot %08x unavailable", f.arg);
@@ -272,10 +302,13 @@ static bool resolve_fixup(const ApplyCtx& cx, const Fixup& f, uintptr_t write_at
                 _snprintf_s(why, why_n, _TRUNCATE, "geometry operand fixup with no anchor site");
                 return false;
             }
+            const bool w16 = (f.kind == Fix::Imm16GeomAdd || f.kind == Fix::Imm16GeomSet);
             uint32_t orig = 0;
-            memcpy(&orig, cx.site_expect + f.ofs, f.kind == Fix::Imm16GeomAdd ? 2 : 4);
+            memcpy(&orig, cx.site_expect + f.ofs, w16 ? 2 : 4);
             if (f.kind == Fix::Imm32GeomSet) {
                 *out = slot;
+            } else if (f.kind == Fix::Imm16GeomSet) {
+                *out = slot & 0xFFFF;
             } else if (f.kind == Fix::Imm32GeomAdd) {
                 *out = (uint32_t)((int32_t)orig + (int32_t)slot);
             } else {
@@ -435,6 +468,8 @@ static bool apply_record(RecState& rs, uintptr_t reb) {
         }
     }
     if (r.nstubs) FlushInstructionCache(GetCurrentProcess(), cave::g_base, cave::used());
+    rs.cave_lo = r.nstubs ? (uintptr_t)cave::g_base + cave_mark : 0;
+    rs.cave_hi = r.nstubs ? (uintptr_t)cave::g_base + cave::used() : 0;
 
     // Log every emitted stub byte for byte. The post-patch .text dump cannot see
     // the cave, so this line is what lets a stub be disassembled and checked
@@ -465,7 +500,8 @@ static bool apply_record(RecState& rs, uintptr_t reb) {
                 set_state(rs, St::Failed, "site %u: %s", i, why);
                 bad = true; break;
             }
-            memcpy(out + s.fx[k].ofs, &v, s.fx[k].kind == Fix::Imm16GeomAdd ? 2 : 4);
+            const bool w16 = (s.fx[k].kind == Fix::Imm16GeomAdd || s.fx[k].kind == Fix::Imm16GeomSet);
+            memcpy(out + s.fx[k].ofs, &v, w16 ? 2 : 4);
         }
         if (bad) { revert(r.key); cave::rewind_to(cave_mark); return false; }
 
