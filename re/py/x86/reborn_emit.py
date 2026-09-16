@@ -28,7 +28,7 @@ Expected bytes always come out of OUR Sacred_decrypted.exe. Sites are grouped
 into one record per function of ours, because a half-patched function draws a
 torn frame and the patch engine applies a record atomically.
 """
-import os, re, json, struct, collections
+import os, re, sys, json, struct, collections
 from capstone import Cs, CS_ARCH_X86, CS_MODE_32
 from capstone import x86 as X
 import buildmap as bm
@@ -459,48 +459,72 @@ def align_cluster(ours, reb, dm, lo, hi, wild):
     return pre, post - pre, fx
 
 
+def our_function(ours, va):
+    """(entry, instructions) of the Ghidra function of ours holding `va`, decoded
+    linearly from its entry - the only instruction boundaries we trust."""
+    import scan
+    f = scan.gh_func_of(va)
+    if f is None:
+        return None, []
+    return f, dis(ours, f, scan.GH_MAX[f] - f + 1)
+
+
+STACK_REGS = (X.X86_REG_ESP, X.X86_REG_EBP)
+
+
+def stack_disps(insns):
+    return {(op.mem.base, op.mem.disp) for i in insns for op in i.operands
+            if op.type == X.X86_OP_MEM and op.mem.base in STACK_REGS}
+
+
 def find_rewrite_block(ours, reb, dm, t, branch_wild):
     """The region around `t` that ReBorn rewrote in place, when it kept its length.
 
-    Aligns on clean context some way before `t`, walks both builds instruction by
-    instruction to the first difference, then on to the first ReBorn instruction
-    past `t` where both builds agree again at the same distance. Returns
+    Both ends are instruction boundaries of OUR function, decoded from its entry;
+    the ReBorn side is the same offsets at the aligned distance, and its decode
+    must land exactly on the block end too. Returns
     ((reb_start, reb_end, our_start), None) or (None, why)."""
-    delta = anchor = None
+    delta = None
     for back in (32, 64, 112, 176, 256):
-        end = t - back
-        if not rc.sweep_back(reb, end, span=48):
-            continue
-        a, _ = dm.locate_old(end, before=20, after=0, win=0x3000, wild=branch_wild)
+        a, _ = dm.locate_old(t - back, before=20, after=0, win=0x3000, wild=branch_wild)
         if a is not None:
-            anchor, delta = end, a - end
+            delta = a - (t - back)
             break
     if delta is None:
         return None, "no aligned context before it"
+    entry, insns = our_function(ours, t + delta)
+    if not insns:
+        return None, "not inside a known function of ours"
+    at = {i.address: k for k, i in enumerate(insns)}
+    k0 = max((k for k, i in enumerate(insns) if i.address <= t + delta - back), default=None)
+    if k0 is None:
+        return None, "context before it lies outside our function"
     start = None
-    for ins in dis(reb, anchor, t - anchor + 16):
-        if ins.address > t:
-            break
-        if any(branch_wild(ins.address + k) for k in range(ins.size)):
-            continue                                  # another patch, ported on its own
-        mine = next(MD.disasm(ours.rd(ins.address + delta, 16), ins.address + delta), None)
-        rb = bytes(ins.bytes)
-        if mine is not None and mine.size == ins.size and bm.masked_eq(bytes(mine.bytes), rb, bm.mask_of(rb)):
-            continue
-        start = ins.address
-        break
+    k = k0
+    while k < len(insns) and insns[k].address <= t + delta:
+        mine = insns[k]
+        r = mine.address - delta
+        if not any(branch_wild(r + j) for j in range(mine.size)):
+            rb = reb.rd(r, mine.size)
+            mb = bytes(mine.bytes)
+            if rb is None or not bm.masked_eq(rb, mb, bm.mask_of(mb)):
+                start = k
+                break
+        k += 1
     if start is None:
         return None, "no difference before it"
-    our_bounds = {i.address for i in dis(ours, start + delta, 224)}
-    for ins in dis(reb, start, 224):
-        y = ins.address
-        if y <= t:
+    for k in range(start + 1, len(insns)):
+        y = insns[k].address
+        if y <= t + delta:
             continue
-        if y - start > 192:
+        if y - insns[start].address > 192:
             break
-        want = reb.rd(y, 12)
-        if y + delta in our_bounds and bm.masked_eq(ours.rd(y + delta, 12), want, bm.mask_of(want)):
-            return (start, y, start + delta), None
+        want = ours.rd(y, 12)
+        if bm.masked_eq(reb.rd(y - delta, 12), want, bm.mask_of(want)):
+            rs, re_ = insns[start].address - delta, y - delta
+            if sum(i.size for i in dis(reb, rs, re_ - rs)) != re_ - rs:
+                return None, "ReBorn's bytes do not decode to whole instructions over the block"
+            return (rs, re_, insns[start].address), None
     return None, "the two builds do not agree again after it"
 
 
@@ -508,13 +532,26 @@ def port_block(ours, reb, mp, blk, found, is_layout):
     """Fixups that make ReBorn's rewritten bytes [start, end) run at our start."""
     start, end, our = blk
     delta = our - start
+    entry, func_insns = our_function(ours, our)
+    bounds = {i.address for i in func_insns}
+    theirs = dis(reb, start, end - start)
+    # ReBorn's code uses ReBorn's frame; if it touches a stack slot our function
+    # never uses, the two compilations laid the frame out differently.
+    alien = stack_disps(theirs) - stack_disps(func_insns)
+    if alien:
+        return None, "uses stack slots our function does not have: " + ", ".join(
+            f"[{'esp' if b == X.X86_REG_ESP else 'ebp'}{d:+#x}]" for b, d in sorted(alien))
     fx = []
-    for ins in dis(reb, start, end - start):
+    for ins in theirs:
         base = ins.address - start
         t = branch_target(ins)
         if t is not None:
-            if start <= t < end or (ins.imm_size == 1) or abs(t - start) < 0x1000:
-                continue            # inside, or within the aligned function: the distance holds
+            if start <= t < end:
+                continue                                  # inside: copied along
+            if ins.imm_size != 4:
+                if t + delta not in bounds:
+                    return None, f"short branch to {t:#x} does not land on our instruction"
+                continue                                  # same distance, same function
             m = mp.code(t)
             if m is None:
                 return None, f"cannot map branch target {t:#x}"
@@ -614,6 +651,15 @@ def main():
         if not bm.masked_eq(ours.rd(our_host, host.size), hb, bm.mask_of(hb)):
             blockable.append((t, label, "ReBorn changed the host instruction itself")); continue
         ofs = t - host.address
+        # The host found by voting over ReBorn's bytes can lose a prefix
+        # (`66 C7 44 24 14 imm16` read as a 32-bit mov one byte later). Our
+        # function decoded from its entry has the true boundaries: take the
+        # instruction of ours that holds the same field.
+        _, finsns = our_function(ours, our_host)
+        field_va = our_host + ofs
+        holder = next((i for i in finsns if i.address <= field_va < i.address + i.size), None)
+        if holder is not None and holder.address != our_host:
+            our_host, ofs = holder.address, field_va - holder.address
         ins = next(MD.disasm(ours.rd(our_host, 16), our_host), None)
         field_ok = ins is not None and (
             (ins.imm_size and ins.imm_offset == ofs and ins.imm_size >= f["width"]) or
@@ -905,7 +951,11 @@ def main():
                     f'  "OverLookers (ReBorn), HD - relocated by re/py/x86/reborn_emit.py",\n'
                     f'  nullptr, false, nullptr, 0, {stubs_ref}, {tag}_sites, {len(clean)} }},')
 
-    with open(OUT_INC, "w", encoding="utf-8", newline="\n") as f:
+    # `--out FILE` writes somewhere else, so a table can be inspected without
+    # touching the one the next build of the DLL picks up.
+    out_path = sys.argv[sys.argv.index("--out") + 1] if "--out" in sys.argv else OUT_INC
+    print(f"writing {out_path}")
+    with open(out_path, "w", encoding="utf-8", newline="\n") as f:
         f.write("// GENERATED by re/py/x86/reborn_emit.py - do not edit, do not commit.\n"
                 "// Expected bytes come from our own Sacred_decrypted.exe; layout values from\n"
                 "// hd/geometry.cpp at apply time; stub bytes from the user's SacredReborn.exe.\n"

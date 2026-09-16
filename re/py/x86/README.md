@@ -31,6 +31,9 @@ and caches its own scans under `_cache/` (delete that dir after re-exporting).
 | `buildmap.py` | address correspondence between our build and another Sacred build (SacredReborn.exe): STEP-64 delta map of masked signatures, cached in `_cache/`; `old2new`/`new2old` answer only inside a run (no extrapolation), `locate_old`/`locate_new` prove an address with byte context around a patched span |
 | `reloc_build.py` | ports the SDK's engine VAs to another build on top of `buildmap` (signature + call-site votes for code, operand votes for data) → `sdk/re/reborn_symbols.json` |
 | `reborn_catalog.py` | enumerates ReBorn's code patches (branches into its .rdata stub cave and .rsrc code tail, run-time writes into .text operands), locates each in our build by bytes or by instruction shape, walks every stub. Output `sdk/re/hd_table.gen.json` + `sdk/re/patch_review_queue.md` holds ReBorn's disassembly, so both are **gitignored** |
+| `reborn_init_emu.py` | runs ReBorn's HD init (two routines in its .rsrc tail) on paper for any W x H: every address it writes and the value, so `hd/geometry.cpp` and the operand writes can be checked at several sizes |
+| `reborn_emit.py` | turns the catalogue into `patchset/records_generated.inc` (gitignored): operand writes, in-place slot references, rewritten blocks, reduced and relocated stubs, one record per function of ours, a function patched whole or not at all. `--out FILE` writes elsewhere |
+| `reborn_audit.py [inc]` | checks a generated table against our build: site ends on instruction boundaries of our function, whole instructions, calls on function entries, data reads our function already makes |
 | `balance_keys.py` | extracts the balance key → live global-variable table out of the native parser `FUN_005eb010` (227 named floats/ints at `0x00AD4490..0x00AD55A8`) |
 
 ## Ghidra side (`sdk/re/ghidra/`)
