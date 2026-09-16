@@ -124,3 +124,5 @@ HIGH. **RUNTIME-BP to confirm 9512 actually lights slot 1:** BP
 `0x004A5980`, param_1(slot)==1, check it returns 1 and outU/outV sane;
 and that `+0x3a0+C*8` holds your idx. If the band check surprises,
 dump `entry+8` and `entry+4` there.
+
+> **2026-09-16 correction:** the "per-class" quest slot table (cQuestMgr+0x3A0, 8-byte stride, 16 slots) is indexed by the active hero index (1..16), not by hero class. Evidence: `classes/new_class_data.md` Q4.

@@ -148,6 +148,108 @@ function M.hide_dead_markers()
   return #recs
 end
 
+-- ── Silent givers: let the region's chatter talk for them ────────────────────
+-- A giver of a stripped quest is still bound to its dead node (cCreature+0x245 =
+-- the node's index), so a click opens nothing. Unbound (+0x245 = 0) the engine
+-- picks the region's line for its creature type instead (FUN_00549920:21-52: the
+-- SetRgnDialog table, NPC_Dialog_Farmer and the like), for NPCs whose side and AI
+-- mode allow it (RE_dialog_buttons.md §10). The unbinding is vanilla's own record,
+-- `SetNPCState <name> 0a 0` (870 records), so the NPC is addressed by its script
+-- name: its name id is cObject+0x3c, the engine's name table qm+0x765C (stride
+-- 0x48, "LRes:" + name, id at +0x44) turns it back into the name, and the name
+-- must resolve to the same creature (object_by_name) before the record is sent.
+-- All 181 live bindings to quest-owned nodes in base:VAMPIRELADY are named
+-- (res:<n>); the 4 nameless ones are enemies. Region hooks spawn givers when the
+-- hero comes near, so the object table is swept continuously, a slice per tick.
+local OM_PTR = 0x00AD5C40
+local NAMES_B, NAMES_E, NAMES_STRIDE = 0x00AACF80 + 0x765C, 0x00AACF80 + 0x7660, 0x48
+local LRES = 0x7365524C                                          -- "LRes"
+local sweep = { world = nil, h = 1, dead = nil, dlg_end = nil, done = {}, freed = 0, queued = {} }
+
+local function s32(v) return v and (v >= 0x80000000 and v - 0x100000000 or v) end
+
+-- DlgNPC indices whose node belongs to a quest that is not set up (and not ours).
+local function dead_nodes(peek)
+  local db, de = peek(DLG_B), peek(DLG_E)
+  if not db or not de or de < db then return nil end
+  if sweep.dead and sweep.dlg_end == de then return sweep.dead end
+  local owned = owned_nodes(peek)
+  if not owned then return nil end
+  local dead, state = {}, {}
+  for p = db + DLG_STRIDE, de - DLG_STRIDE, DLG_STRIDE do
+    local qid = owned[cstr(peek, p + 4, 64):lower()]
+    if qid then
+      if state[qid] == nil then
+        local q = sacred.quest_state(qid)
+        state[qid] = not (q and (q.setup or q.sdk))
+      end
+      if state[qid] then dead[(p - db) // DLG_STRIDE] = true end
+    end
+  end
+  sweep.dead, sweep.dlg_end = dead, de
+  return dead
+end
+
+-- The script name of the object with name id `id` ("res:17085"), or nil.
+local function script_name(peek, id)
+  local b, e = peek(NAMES_B), peek(NAMES_E)
+  if not b or not e or e < b then return nil end
+  for p = b, e - NAMES_STRIDE, NAMES_STRIDE do
+    if peek(p + 0x44) == id then
+      if peek(p) ~= LRES then return nil end
+      return cstr(peek, p, 68):sub(6)
+    end
+  end
+  return nil
+end
+
+-- One slice of the sweep: `count` object handles. Returns how many were unbound.
+function M.free_silent_givers(count)
+  local peek = sacred.peek_u32
+  if not (peek and sacred.quest_state and sacred.object_by_name and sacred.npc_info) then return 0 end
+  local world = require("vars").world()
+  if sweep.world ~= world then
+    sweep.world, sweep.h, sweep.dead, sweep.done, sweep.queued = world, 1, nil, {}, {}
+  end
+  local dead = dead_nodes(peek)
+  if not dead then return 0 end
+  local om = peek(OM_PTR)
+  local arr, fin = om and om ~= 0 and peek(om + 4), om and om ~= 0 and peek(om + 8)
+  if not arr or arr == 0 or not fin or fin < arr then return 0 end
+  local n = (fin - arr) // 4
+  local Vb, recs, names = require "verbs", {}, {}
+  for _ = 1, count or 600 do
+    if sweep.h >= n then sweep.h = 1 end
+    local h = sweep.h
+    sweep.h = h + 1
+    local c = peek(arr + h * 4)
+    if c and c ~= 0 and not sweep.done[h] then
+      local idx = s32(peek(c + 0x245))
+      if idx and idx > 0 and dead[idx] and sacred.npc_info(h) then
+        sweep.done[h] = true
+        local id = peek(c + 0x3c)
+        local name = id and id ~= 0 and script_name(peek, id)
+        if name and name ~= "" and sacred.object_by_name(name) == h then
+          recs[#recs + 1] = Vb.npc_state(name, Vb.ST.no_node)
+          names[#names + 1] = ("%s h=%d"):format(name, h)
+        elseif sacred.log then
+          sacred.log(("[novanilla] h=%d is bound to a dead node but has no usable name (id %s)")
+            :format(h, tostring(id)))
+        end
+      end
+    end
+  end
+  if #recs > 0 then
+    require("actions").run(table.concat(recs))
+    sweep.freed = sweep.freed + #recs
+    if sacred.log then
+      sacred.log(("[novanilla] %d silent givers unbound (%d so far): %s")
+        :format(#recs, sweep.freed, table.concat(names, ", ")))
+    end
+  end
+  return #recs
+end
+
 -- Keep them hidden: once a world is ready, and every ~5 s after (16 SetIcon records
 -- in global sections, mostly area triggers, can put a glyph back). Call once.
 local watching = false
@@ -159,6 +261,20 @@ function M.keep_markers_hidden()
     if not V.is_ready() then t = 0; return end
     t = t + 1
     if t == 8 or t % 20 == 0 then M.hide_dead_markers() end
+  end)
+end
+
+-- Sweep the object table for silent givers, a slice every tick once a world is
+-- ready. Call once.
+local freeing = false
+function M.keep_givers_talking()
+  if freeing then return end
+  freeing = true
+  local V, t = require "vars", 0
+  sacred.on_tick(function()
+    if not V.is_ready() then t = 0; return end
+    t = t + 1
+    if t >= 12 then M.free_silent_givers(600) end
   end)
 end
 

@@ -568,3 +568,5 @@ culled before the list (coord/`+0x10` issue) — then fall back to BP
 `0x00497758` (`cmp [edi+edx+4],2`, the `+0x04==2` membership gate) /
 `0x00497745` (the `FUN_00635c40` cull call) to see which test drops
 it.
+
+> **2026-09-16 correction:** the "per-class" quest slot table (cQuestMgr+0x3A0, 8-byte stride, 16 slots) is indexed by the active hero index (1..16), not by hero class. Evidence: `classes/new_class_data.md` Q4.

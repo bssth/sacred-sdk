@@ -1907,6 +1907,8 @@ if NO_VANILLA_QUESTS then
   local NV = require "novanilla"
   NV.strip(recs, "FunkCode")
   NV.keep_markers_hidden()               -- the givers of stripped quests keep their "!" otherwise
+  NV.keep_givers_talking()               -- and unbound from their dead nodes they chatter
+  require("openworld").keep_open()       -- the passes, doors and teleporters quests used to open
 end
 
 return recs

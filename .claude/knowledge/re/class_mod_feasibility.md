@@ -16,15 +16,20 @@ The research sections were static work; the Implementation section at the end is
   - 8 Dwarf, 9 Daemon
   - The debug switch at 0x7f4e6b prints these class names.
 - The class mask is **32-bit**, both in memory and in Weapon.pak (u32 at record `+0x82`).
-  - Classic classes use bits 0..5; Dwarf 0x400000, Daemon 0x800000; bits 6..21 are free.
+  - Classic classes use bits 0..5; Dwarf 0x400000, Daemon 0x800000. Bits 6..21 are NOT simply free:
+    - 0x40 = not-for-heroes;
+    - bits 8-13 carry the item type byte;
+    - bit 20 is tested elsewhere;
+    - every class check masks with 0xC0003F, so an item whose only class bit is new counts as usable by all.
+    - See `classes/new_class_data.md`.
   - `cEngine_initGame` accepts class 1..12.
-  - So the mask does NOT block a 9th class. What makes a 9th class impractical:
+  - So the mask does not block a 9th class; the 2026-09-16 follow-up (section "Adding a class" below) found no hard wall at all. The original objections were:
     - 62 per-class jump tables in 27 functions;
     - the 8-slot class-select table `0x9E3248`;
     - fixed 8x Balance tables;
     - the voice switches;
     - a full art set.
-  - Replacing a slot stays the route.
+  - Replacing a slot stays the cheap route.
 
 ## Where a class is defined (all data unless noted)
 | aspect | where | how to change |
@@ -33,7 +38,7 @@ The research sections were static work; the Implementation section at the end is
 | attribute growth | no table: `base + base*(level-1)/10` (FUN_007f49a0) | via base |
 | start equipment (8x20) / start inventory (8x8) | Balance.bin → `0xAD47B0` / `0xAD4A30` | custom/bin or a runtime write |
 | start position, intro quests | `bin/TYPE_NPC_<CLASS>/StartCode.bin` + FunkCode window | custom/bin + SDK Lua quests |
-| combat-art roster | rune items (Weapon.pak ItemTyp 29, class mask `+0x82`) + schools in `bin/wpmod.bin` (parser FUN_0042cd50, **layout not decoded**) | data |
+| combat-art roster | rune items (Weapon.pak ItemTyp 29, class mask `+0x82`). `bin/wpmod.bin` is NOT the roster: it holds random bonus rules per item template (format in `classes/new_class_data.md`) | data |
 | combat-art effects | exe code: moves `0x94FDAC`, spells `0x952A38` (no class field) | C hooks only |
 | model | per-TYPE entry, file name at `+0x37` (FUN_00426250); motions follow the model | one record; the art is separate work |
 | armor visuals | every wearable piece is a per-class mesh (73..105 per class) | art |
@@ -97,7 +102,7 @@ ready hero body. Townsfolk-as-hero mods hit the same wall: no attack or cast ani
    an art track.
 
 ## Open / next probes
-- Decode the `wpmod.bin` roster layout.
+- Where the game maps a combat-art school to its arts at runtime (wpmod.bin turned out to be item bonus rules).
 - Live: swap one Creature.pak row via custom/pak and check the class select + skill pool.
 - Live: give a body a CA from another class and see which motion plays; FUN_005467a0 /
   FUN_00542b20 hold hand-tuned per-class motion ids.
@@ -147,3 +152,60 @@ Open:
 - Donor model slot tables are shared with the NPCs that use them.
 
 RE reports behind these rows: `classes/armor_visuals_report.md`, `classes/portrait_skin_report.md`.
+
+## Adding a class (follow-up study, 2026-09-16)
+Static work; details and VAs in `classes/new_class_{exe,ui_save,data}.md`.
+
+**No hard wall.** The two main facts:
+- `cEngine_initGame` accepts class 1..12 (0x60DBAC/0x60DBB5), and the hero is created with type = class.
+- On load nothing checks the class range. `cEngine_load` checks only the version; the hero list only needs class != 0.
+
+Also:
+- "Is a hero" = Creature.pak class byte 1 (FUN_00426650). Every `type < 0x20` check puts 10..31 on the hero side.
+- Default cases survive: Dwarf/Daemon already fall to default in older 7-class switches.
+- Types 10..31 have no data anywhere. The 1..12 bound is headroom, not a cut class; GUI_CHAR_01..12 are texture pages.
+
+**What a true type 10 gets today:**
+- silent: 38 voice tables;
+- black name colour and a generic portrait;
+- no start kit (`cmp bx,8` at 0x60DC48);
+- no StartCode folder: `FUN_0043ced0` falls back to `bin\<MODEL>.GRN\` or `bin\Bad Item\`;
+- class-locked items refused;
+- no default combat arts (0x55FE58, 0x5600D6);
+- multiplayer template index 0..15 collides (FUN_007f3860, unverified);
+- the 130 single-class compares take the "not X" branch.
+
+**Data needed:** all of it is small and addable.
+- Items.pak record 10: the index entries for 10..31 point at zeroed records, and the loader copies any record whose +0x2E != 0.
+- Creature.pak: append a row and set count 475; rows are looked up by id.
+- A script folder with StartCode/FunkCode/QuestCode/QuestPoolCode.
+- Texts.
+- Portrait cells: small via patch_u32; large needs a stub.
+
+**Two paths:**
+1. **True type 10.**
+   - Minimum ≈ 15–20 exe patches for a working generic hero: equipment masks (~11), start kit/default combat arts from Lua or ~6 patches, a folder-name hook.
+   - Full parity by aliasing to a donor class X ≈ 55 sites:
+     - the class is read inline at ~142 sites, with no central getter;
+     - 72 jump tables can be generated (53 with a 6-byte `ja`, 19 with `cmp+ja`) → 42 stubs plus ~10 hand patches;
+     - voice needs one write of the donor id into cMSS+0xAF42 after 0x684562.
+   - Estimate 2–3 days plus live tests.
+   - Needed only if the class must coexist with all 8 vanilla classes (multiplayer/party); GameServer.exe is unexamined.
+2. **Virtual class = variant of slot X** (recommended for single player, ≈1–2 days).
+   - Select screen:
+     - hook 0x70DB13 (ESI = class, before the setter), refresh the preview with FUN_006f4e60, swap the texts FUN_0070f5c0 / FUN_0070cd50;
+     - vanilla precedent: SHIFT turns class 1→9 and 2→8 at 0x70DAED.
+   - Marker: the C3 hero descriptor (0x22C bytes, in .pax and GAME.PAK, built by FUN_00604300 on a zeroed buffer). +0x1D8..+0x22B are never written; it is readable before objects exist and copied into the hero-list widget +0x4D4.
+   - Swap class X's data classmod-style: at creation (0x70DB13 / initGame 0x60DB72) and at `cEngine_load` entry 0x61B6F0. The patch queue needs undo, to switch back between saves.
+   - Limits: TYPE data is global per client, so two X-heroes with different variants in one session (MP party, or the 8-widget hero list) look the same; the variant keeps X's hardcoded mechanics.
+
+**The select screen has no room for a 9th widget:**
+- The loop ends at table end 0x9E3510, and RTTI follows the table.
+- cUI_Character+0x1B4 holds 8 pointers, with the next field at +0x1D4.
+- The same 8 widgets show Hero00..07.pax.
+- Relocating means ~15 sites in 8 functions.
+- A toggle on an existing slot is the cheap UI for either path.
+
+**Corrections found on the way:**
+- The quest "per-class" table (cQuestMgr+0x3A0) is indexed by the active hero index 1..16, not by class.
+- The 9×12 floats at 0xAD4CC0 are a creature HP-tier curve.

@@ -744,7 +744,12 @@ static void mkdirs(const char* path) {
     char dir[MAX_PATH];
     strncpy_s(dir, _TRUNCATE, path, _TRUNCATE);
     for (char* p = dir + 1; *p; p++) {
-        if (*p == '\\') { *p = 0; CreateDirectoryA(dir, nullptr); *p = '\\'; }
+        if (*p == '\\' || *p == '/') {
+            char saved = *p;
+            *p = 0;
+            CreateDirectoryA(dir, nullptr);
+            *p = saved;
+        }
     }
 }
 
