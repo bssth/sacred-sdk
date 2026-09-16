@@ -91,6 +91,11 @@ script, here an empty `FunkCode.bin`.
 Ready-made recipes for the usual questions — renaming an NPC, changing a reward,
 reacting to a kill, closing a road — are in **[MODDING_COOKBOOK.md](MODDING_COOKBOOK.md)**.
 
+A step-by-step tutorial that ends with three working mods (a message when the
+world loads, playing the Dwarf as Wilbur, a companion who brings an ambush) is on
+Steam: **[Sacred SDK quick start](https://steamcommunity.com/sharedfiles/filedetails/?id=3802870489)**. The same tutorial is in
+the wiki as [Quick Start](../../wiki/Quick-Start).
+
 ---
 
 ## What it can do
@@ -102,6 +107,7 @@ disassembly.
 |---|---|
 | **Quests** | Real entries in the engine's quest registry: SetUpQuest / TriggerQuest / ExitQuest drive them, and the engine writes the journal, the category, the compass column and the fanfares itself. Objectives use its own kill and pickup counters, which count, display "3 of 5" and survive a save. |
 | **Dialog** | Your own nodes on your own NPCs: your text, up to four answer buttons, each button a Lua function. Quest markers over their heads, node switching, popups with no NPC at all. |
+| **Hero classes** | A class slot plays with another creature's body: its model, skin and portraits, a new name and description, while stats, skills and combat arts stay the class's. All eight slots were replaced and played. |
 | **NPCs** | Spawn from templates (guard, merchant, smith, trainer, enemy, companion…), name them, level them, equip them, make them follow, fight, walk somewhere, play an animation, faint and get back up. A `persona` keeps a character — the same handle, the same name — across savegames and chapters. |
 | **The world** | Chests with loot, clickable objects, map icons, item drops, particle marks, barriers that close a road, and rectangles on the ground that run your code when the hero walks in. |
 | **Text** | New strings written into `global.res` at bake time, dialog lines swapped by name, the game's own on-screen banners. |
@@ -109,9 +115,18 @@ disassembly.
 | **Cut scenes** | Cinema mode, queued walks and animations, camera focus. |
 | **State** | Engine variables, hero quest bits, and a savegame hook — a mod's progress is in the player's save, not in a sidecar file. |
 
-The reference is the **[wiki](../../wiki)**: Installation, Writing Your First
-Mod, Native Quests, Runtime NPCs, Dialog, Vanilla Verbs, World Objects, Zones and
-Barriers, Cut Scenes, the Lua API.
+The reference is the **[wiki](../../wiki)**: Quick Start, Installation, Writing
+Your First Mod, Native Quests, Runtime NPCs, Hero Classes, Dialog, Vanilla Verbs,
+World Objects, Zones and Barriers, Cut Scenes, the Lua API.
+
+---
+
+## Community
+
+- **[Quick start guide on Steam](https://steamcommunity.com/sharedfiles/filedetails/?id=3802870489)**: install the SDK and build
+  three mods in about 15 minutes.
+- **[DarkMatters forum thread](https://darkmatters.org/forums/index.php?/topic/73326-sacred-gold-underworld-modding-sdk-with-lua-support)**: questions, bug reports and
+  the mods people make.
 
 ---
 
