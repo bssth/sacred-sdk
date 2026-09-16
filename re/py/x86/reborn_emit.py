@@ -47,8 +47,13 @@ SLOTS = (0x00A1EF00, 0x00A1F100)
 IMAGE = (0x00400000, 0x01E00000)
 
 
+SLOT_SET = set()   # addresses ReBorn's init actually writes in its table, filled by native_slots()
+
+
 def is_slot(v):
-    return SLOTS[0] <= v < SLOTS[1]
+    """A layout slot - by the init's own writes, not by address range: ReBorn's
+    table shares its neighbourhood with CRT data (0xA1EF80 is a function pointer)."""
+    return v in SLOT_SET
 
 
 NATIVE = {}   # slot VA -> 8 raw bytes at 1024x768, filled by native_slots() from the emulator
@@ -63,6 +68,10 @@ def native_slots(reb):
     one site at a time. The patch engine repeats the check on our C++ values.
     """
     import reborn_init_emu as emu
+    SLOT_SET.clear()
+    for size in ((1024, 768), (1920, 1080), (1280, 720)):
+        o, _ = emu.run(*size, reb)
+        SLOT_SET.update(a for a in o if 0xA1EF40 <= a < 0xA1F0E0)
     out, _ = emu.run(1024, 768, reb)
     out.update(sdk_slots(1024, 768))
     byte = {}
@@ -292,6 +301,11 @@ def relocate(ours, reb, mp, row, body):
                     fx.append((off, "Abs32Const", struct.unpack("<I", c)[0]))
                     continue
                 our = mp.data(v)
+                if our is None and 0xA1EF40 <= v < 0xA1F0E0:
+                    # a scratch cell of ReBorn's own in its table block: nothing in
+                    # the engine uses it, so it lives in our block as well
+                    fx.append((off, "Abs32Geom", v))
+                    continue
                 if our is None:
                     return None, f"cannot map data {v:#x} ({reb.sec_of(v)})"
                 if c is not None and ours.rd(our, op.size) != c:
@@ -372,6 +386,64 @@ def emulated_targets(reb):
 
 
 # ---------------------------------------------------------------------------
+def align_cluster(ours, reb, dm, lo, hi, wild):
+    """Port a run of ReBorn instructions [lo, hi) that reads layout slots but no
+    longer lines up byte for byte with ours (push [slot] is a byte longer than
+    push imm32, so ReBorn's block grew). The block is found in ours between the
+    context before `lo` and the context after `hi`, and ported instruction by
+    instruction when every pair is the same operation. Returns (va, len, fixups)
+    of our span, or (None, None, why)."""
+    pre, _ = dm.locate_old(lo, before=20, after=0, win=0x3000, wild=wild)
+    if pre is None:
+        return None, None, "block context not found"
+    # The context after the block is searched only just past its start, and
+    # short: a grown ReBorn function can swallow the padding that follows it.
+    post = None
+    for n in (16, 12, 8):
+        want = reb.rd(hi, n)
+        mk = bm.mask_of(want)
+        hits = [c for c in range(pre + 1, pre + 97) if bm.masked_eq(ours.rd(c, n), want, mk)]
+        if len(hits) == 1:
+            post = hits[0]
+            break
+    if post is None:
+        return None, None, "block end not found"
+    if not 0 < post - pre <= 96:
+        return None, None, f"block context inconsistent ({pre:#x}..{post:#x})"
+    mine = dis(ours, pre, post - pre)
+    theirs = dis(reb, lo, hi - lo)
+    if sum(i.size for i in mine) != post - pre or len(mine) != len(theirs):
+        return None, None, f"{len(theirs)} ReBorn instruction(s) against {len(mine)} of ours"
+    fx = []
+    for a, b in zip(mine, theirs):
+        base = a.address - pre
+        if a.mnemonic != b.mnemonic or len(a.operands) != len(b.operands):
+            return None, None, f"`{a.mnemonic} {a.op_str}` against ReBorn `{b.mnemonic} {b.op_str}`"
+        for oa, ob in zip(a.operands, b.operands):
+            if abs_mem(ob) and is_slot(ob.mem.disp & 0xFFFFFFFF):
+                slot = ob.mem.disp & 0xFFFFFFFF
+                if oa.type == X.X86_OP_IMM and a.imm_size == 4 and ob.size == 4:
+                    if not native_ok(slot, ours.rd(a.address + a.imm_offset, 4)):
+                        return None, None, f"`{a.mnemonic} {a.op_str}`: slot {slot:#x} differs at 1024x768"
+                    fx.append((base + a.imm_offset, "Imm32GeomSet", slot))
+                elif abs_mem(oa) and oa.size == ob.size:
+                    if not native_ok(slot, ours.rd(oa.mem.disp & 0xFFFFFFFF, oa.size)):
+                        return None, None, f"`{a.mnemonic} {a.op_str}`: slot {slot:#x} differs at 1024x768"
+                    fx.append((base + a.disp_offset, "Abs32Geom", slot))
+                else:
+                    return None, None, f"`{a.mnemonic} {a.op_str}` cannot take slot {slot:#x}"
+            elif oa.type != ob.type:
+                return None, None, f"`{a.mnemonic} {a.op_str}` against ReBorn `{b.mnemonic} {b.op_str}`"
+            elif oa.type == X.X86_OP_REG and oa.reg != ob.reg:
+                return None, None, f"`{a.mnemonic} {a.op_str}` uses other registers than ReBorn"
+            elif oa.type == X.X86_OP_IMM and branch_target(a) is None and oa.imm != ob.imm \
+                    and not IMAGE[0] <= (oa.imm & 0xFFFFFFFF) < IMAGE[1]:
+                return None, None, f"`{a.mnemonic} {a.op_str}`: ReBorn changed the constant"
+    if not fx:
+        return None, None, "nothing to patch"
+    return pre, post - pre, fx
+
+
 def main():
     import scan
     import reborn_catalog as rc
@@ -448,6 +520,108 @@ def main():
             fx=[(ofs, kind, f["slot"])], stub=None,
             note=f"{ins.mnemonic} {ins.op_str}  <- {f['kind']} slot {f['slot']:#x}"))
         tally["operand write"] += 1
+
+    # --- 1b. engine instructions ReBorn pointed at its table in place ----------
+    # `fmul [1/1024]` -> `fmul [1/W]`, `cmp ecx, 0x3FF` -> `cmp ecx, [W-1]`: the
+    # same length, so ReBorn needed no stub. Ours becomes the same instruction
+    # reading our slot (Abs32Geom) or holding the slot's value (Imm32GeomSet).
+    # ReBorn's stubs also keep computed layout values in scratch cells of their
+    # table block (0xA1EFB0: round(256*H/768), and so on) that engine code then
+    # reads. Those count as layout references too, or a function would be
+    # ported with a bound that moved and a step that did not. A cell in that
+    # block is engine data (CRT pointers live there) only if our own code
+    # references its counterpart the same way.
+    scratch_memo = {}
+    def is_layout(v):
+        if is_slot(v):
+            return True
+        if not 0xA1EF40 <= v < 0xA1F0DC:
+            return False
+        if v not in scratch_memo:
+            scratch_memo[v] = mp.data(v) is None
+        return scratch_memo[v]
+
+    refs, seen = [], set()
+    T, tlo = reb.text, reb.text_lo
+    for i in range(len(T) - 4):
+        v = struct.unpack_from("<I", T, i)[0]
+        if not 0xA1EF40 <= v < 0xA1F0DC or tlo + i in rc.WILD or not is_layout(v):
+            continue
+        ins = rc.host_of(reb, tlo + i)
+        if ins is None or ins.address in seen:
+            continue
+        if any(abs_mem(op) and (op.mem.disp & 0xFFFFFFFF) == v for op in ins.operands):
+            seen.add(ins.address)
+            refs.append(ins)
+    for ins in refs:
+        rc.WILD.update(range(ins.address, ins.address + ins.size))
+    pending = []
+    for ins in refs:
+        label = f"slot ref {ins.address:#x}"
+        verdict = decisions.get(ins.address, ("", ""))
+        if verdict[0] == "skip":
+            continue
+        va, _, how = rc.locate_site(ours, reb, dm, ins.address, ins.size)
+        if va is None:
+            pending.append(ins); continue
+        func = scan.gh_func_of(va)
+        name = scan.gh_name(va) if func is not None else None
+        located[ins.address] = func
+        if verdict[0] == "reject":
+            leave_out(ins.address, va, label, f"hd_decisions.json: {verdict[1]}", func); continue
+        mine = next(MD.disasm(ours.rd(va, 16), va), None)
+        why, fx = None, []
+        if mine is None or mine.size != ins.size or len(mine.operands) != len(ins.operands):
+            pending.append(ins); continue
+        else:
+            for oa, ob in zip(mine.operands, ins.operands):
+                if abs_mem(ob) and is_layout(ob.mem.disp & 0xFFFFFFFF) and not is_slot(ob.mem.disp & 0xFFFFFFFF):
+                    why = f"reads ReBorn scratch cell {ob.mem.disp & 0xFFFFFFFF:#x}, filled by one of its stubs"; break
+                if abs_mem(ob) and is_slot(ob.mem.disp & 0xFFFFFFFF):
+                    slot = ob.mem.disp & 0xFFFFFFFF
+                    if abs_mem(oa) and oa.size == ob.size and mine.mnemonic == ins.mnemonic:
+                        if not native_ok(slot, ours.rd(oa.mem.disp & 0xFFFFFFFF, oa.size)):
+                            why = f"slot {slot:#x} is not our constant at 1024x768"; break
+                        fx.append((mine.disp_offset, "Abs32Geom", slot))
+                    elif oa.type == X.X86_OP_IMM and mine.imm_size == 4 and ob.size == 4:
+                        if not native_ok(slot, ours.rd(va + mine.imm_offset, 4)):
+                            why = f"slot {slot:#x} is not our immediate at 1024x768"; break
+                        fx.append((mine.imm_offset, "Imm32GeomSet", slot))
+                    else:
+                        why = "rewritten"; break
+                elif (oa.type, oa.size) != (ob.type, ob.size) or (
+                        oa.type == X.X86_OP_REG and oa.reg != ob.reg):
+                    why = "rewritten"; break
+        if why == "rewritten":
+            pending.append(ins); continue
+        if why or not fx:
+            leave_out(ins.address, va, label, why or "nothing to patch", func); continue
+        items[(func, name)].append(dict(
+            va=va, len=mine.size, expect=ours.rd(va, mine.size), new=ours.rd(va, mine.size), fx=fx,
+            stub=None, note=f"{mine.mnemonic} {mine.op_str}  -> ReBorn `{ins.mnemonic} {ins.op_str}`"))
+        tally["slot reference in place"] += 1
+
+    clusters = []
+    for ins in sorted(pending, key=lambda i: i.address):
+        if clusters and ins.address - (clusters[-1][-1].address + clusters[-1][-1].size) <= 12:
+            clusters[-1].append(ins)
+        else:
+            clusters.append([ins])
+    for cl in clusters:
+        lo, hi = cl[0].address, cl[-1].address + cl[-1].size
+        va, ln, fx = align_cluster(ours, reb, dm, lo, hi, lambda a: a in rc.WILD)
+        if va is None:
+            for ins in cl:
+                leave_out(ins.address, None, f"slot ref {ins.address:#x}", f"block {lo:#x}..{hi:#x}: {fx}")
+            continue
+        func = scan.gh_func_of(va)
+        name = scan.gh_name(va) if func is not None else None
+        for ins in cl:
+            located[ins.address] = func
+        items[(func, name)].append(dict(
+            va=va, len=ln, expect=ours.rd(va, ln), new=ours.rd(va, ln), fx=fx, stub=None,
+            note="block: " + " ; ".join(f"{i.mnemonic} {i.op_str}" for i in dis(ours, va, ln))))
+        tally["slot block aligned"] += len(cl)
 
     # --- 2 + 3. branches into ReBorn's stubs ----------------------------------
     for r in d["sites"]:
