@@ -81,7 +81,8 @@ custom files whenever Sacred opens something.
     │   │   ├── raw.lua, funkcode.lua, quest.lua, dialog.lua, state.lua, …
     │   ├── _vanilla/         ← decompiled vanilla, used by vanilla.load
     │   ├── examples/         ← copy-paste starters (see below)
-    │   └── bin/              ← YOUR mods go here, mirroring bin/
+    │   ├── mods/             ← YOUR runtime mods (return {}), mirroring no game file
+    │   └── bin/              ← YOUR script mods go here, mirroring bin/
     │       └── TYPE_NPC_*/   ← per-class scripts
     │           ├── QuestCode.lua
     │           └── FunkCode.lua
@@ -491,7 +492,11 @@ The error includes file path and line number.
 
 ## 9. Examples
 
-Drop these directly into `custom/lua/bin/<class>/<name>.lua`:
+Copy these into your own tree. The ones that return records go to
+`custom/lua/bin/<class>/<name>.lua`, and what they return replaces the whole game
+file at that path. The runtime ones that end in `return {}` (07, 08, 09) go to
+`custom/lua/mods/<name>.lua`: at a game script's path such as
+`bin/<class>/FunkCode.lua` they would hand the game an empty script.
 
 - `examples/01_hello.lua` — minimal mod, just declares state
 - `examples/02_text_swap.lua` — bulk-rewrite vanilla via gsub

@@ -21,6 +21,10 @@
      SDK proxy in its place. That is the whole installation: Sacred
      loads ijl15.dll at startup, so the SDK comes up with it.
 
+     Steam's "Verify integrity of game files" puts the original
+     ijl15.dll back, and the SDK no longer loads. Run install.cmd again
+     after a verification.
+
   3. Start the game. The first launch bakes the Lua that ships with the
      SDK (a second or two) and writes sdk\logs\sdk_loaded.log.
 
@@ -50,11 +54,16 @@
 
 --- Your first mod ---------------------------------------------------
 
-  1. Make the folder  custom\lua\bin\TYPE_NPC_GLADIATOR\
-     (or whichever class you play).
+  1. Make the folder  custom\lua\mods\
 
-  2. Copy an example from sdk\custom\lua\examples\ into it as
-     FunkCode.lua and edit it.
+  2. Save a recipe from MODDING_COOKBOOK.md in it, e.g. as
+     custom\lua\mods\kolb.lua, and edit it.
+
+     Keep mods like these, which end in "return {}", out of
+     custom\lua\bin\. A file there bakes to the same path under
+     custom\bin\ and the game reads it in place of its own script:
+     saved as custom\lua\bin\TYPE_NPC_GLADIATOR\FunkCode.lua, a recipe
+     would give that class an empty FunkCode.bin.
 
   3. Restart Sacred. The bake runs at startup; the log line
      "[lua_bake] baked ..." says it worked.
@@ -72,7 +81,8 @@
 
   My mod did nothing
       1. Is there a "[lua_bake] baked" line for your file in the log?
-      2. Did the baked output appear under custom\bin\ ?
+      2. Did the baked output appear under custom\ ? (A mod in
+         custom\lua\mods\ gives an empty custom\mods\<name>.bin.)
       3. The bake runs once per launch -- restart the game after edits.
 
   I want the game back the way it was

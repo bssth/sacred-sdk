@@ -1,9 +1,15 @@
 # SacredSDK cookbook
 
-Short answers to "how do I …". Each recipe is a whole mod: drop it in
-`custom/lua/bin/TYPE_NPC_<YOURCLASS>/FunkCode.lua` (make the folders), restart
-the game, done. `MODDING_GUIDE.md` explains the model behind them, and the wiki
-is the reference.
+Short answers to "how do I …". Each recipe is a whole mod: save it as
+`custom/lua/mods/<name>.lua` (make the folders), restart the game, done.
+`MODDING_GUIDE.md` explains the model behind them, and the wiki is the reference.
+
+These mods do their work while the game runs and end in `return {}`, an empty
+list of script records. Keep them out of `custom/lua/bin/`: a file there bakes to
+the same path under `custom/bin/`, and the game reads it in place of its own
+script. A recipe saved as `custom/lua/bin/TYPE_NPC_GLADIATOR/FunkCode.lua` would
+hand the game an empty `FunkCode.bin` for that class. `mods/` mirrors no game
+file, so its output is never read in place of one.
 
 Everything here has been run in game on Sacred Gold 2.0.2.28. Where the engine
 does something surprising, the recipe says so instead of pretending.
@@ -55,7 +61,7 @@ you handles and types.
 
 ## 2. Change what a quest pays out
 
-Rewards are the engine's own: the gold pops up with its coin sound, the item goes
+Rewards are the engine's own: the gold pops up as the engine's "+N", the item goes
 through the inventory code, and the random roll is the same one vanilla uses.
 
 ```lua
@@ -64,7 +70,7 @@ local Vb = require "verbs"
 local A  = require "actions"
 
 -- when your quest is handed in:
-R.give_gold(1500)                 -- "+1500" over the hero, with the sound
+A.run(Vb.add_gold(1500))          -- "+1500" over the hero, the engine's popup
 R.give_item(2001)                 -- straight into the backpack, by item type
 A.run(Vb.add_exp(4000))           -- experience, through addExperience
 
@@ -110,12 +116,14 @@ Use the engine's own kill counter: it counts, shows its "3 of 5" message, keeps
 the number in the savegame and runs your section at zero.
 
 ```lua
-local O = require "objectives"
-local V = require "vars"
+local O  = require "objectives"
+local V  = require "vars"
+local Vb = require "verbs"
+local A  = require "actions"
 
 O.declare("brigands_dead", function()
   sacred.log("all five are down")
-  require("reward").give_gold(500)
+  A.run(Vb.add_gold(500))
 end)
 
 V.on_ready(function()
@@ -142,7 +150,6 @@ local S  = require "sections"
 local Vb = require "verbs"
 local A  = require "actions"
 local V  = require "vars"
-local R  = require "reward"
 
 local DAY = 1440                       -- game minutes
 local ID  = Vb.SDK_TIMER + 1
@@ -151,7 +158,7 @@ S.define("daily_bonus")                -- an empty section: the Lua below is the
 sacred.on_trigger("SECTION:daily_bonus", function()
   local n = (V.get("MY_DAILY_COUNT") or 0) + 1
   V.set("MY_DAILY_COUNT", n)
-  R.give_gold(250)
+  A.run(Vb.add_gold(250))
   sacred.log("daily bonus #" .. n)
   A.run(Vb.set_timer(ID, DAY, "daily_bonus"))        -- arm the next one
 end)
