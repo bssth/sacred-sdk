@@ -23,6 +23,7 @@
 #include "../engine/build_profile.h"
 #include "../core/config.h"
 #include "../iat_hook.h"
+#include "../hd/geometry.h"
 #include <cstring>
 #include "../imgui/imgui.h"
 
@@ -69,8 +70,10 @@ static constexpr int kGeneratedN = 0;
 //  Per-record state + revert journal (fixed storage; a revert must never fail
 //  for lack of memory)
 // ---------------------------------------------------------------------------
-constexpr int MAX_RECORDS = 128;
-constexpr int MAX_JOURNAL = 512;
+// Room for the generated HD table (one record per patched function) on top of
+// the built-in fixes.
+constexpr int MAX_RECORDS = 512;
+constexpr int MAX_JOURNAL = 2048;
 constexpr int MAX_SITE_LEN = 64;
 
 struct RecState {
@@ -226,6 +229,47 @@ static bool resolve_fixup(const ApplyCtx& cx, const Fixup& f, uintptr_t write_at
             *out = (uint32_t)(int32_t)(tgt - (write_at + 4));
             return true;
         }
+        case Fix::Abs32Geom: {
+            void* p = hd::slot_addr(f.arg);
+            if (!p) {
+                _snprintf_s(why, why_n, _TRUNCATE, "geometry slot %08x unavailable", f.arg);
+                return false;
+            }
+            *out = (uint32_t)(uintptr_t)p;
+            return true;
+        }
+        case Fix::Imm32GeomSet:
+        case Fix::Imm32GeomAdd:
+        case Fix::Imm16GeomAdd: {
+            uint32_t slot = 0;
+            if (!hd::slot_u32(f.arg, &slot)) {
+                _snprintf_s(why, why_n, _TRUNCATE, "geometry slot %08x unavailable", f.arg);
+                return false;
+            }
+            if (!cx.site_expect) {
+                _snprintf_s(why, why_n, _TRUNCATE, "geometry operand fixup with no anchor site");
+                return false;
+            }
+            uint32_t orig = 0;
+            memcpy(&orig, cx.site_expect + f.ofs, f.kind == Fix::Imm16GeomAdd ? 2 : 4);
+            if (f.kind == Fix::Imm32GeomSet) {
+                *out = slot;
+            } else if (f.kind == Fix::Imm32GeomAdd) {
+                *out = (uint32_t)((int32_t)orig + (int32_t)slot);
+            } else {
+                *out = (uint32_t)(uint16_t)((int16_t)orig + (int32_t)slot);
+            }
+            // At 1024x768 every layout value equals the constant the engine was
+            // compiled with, so a mismatch means our formula for that slot is
+            // wrong. Refuse rather than write a number nobody has checked.
+            if (hd::width() == 1024 && hd::height() == 768 && *out != orig) {
+                _snprintf_s(why, why_n, _TRUNCATE,
+                            "geometry slot %08x = %08x but the original operand is %08x at 1024x768",
+                            f.arg, *out, orig);
+                return false;
+            }
+            return true;
+        }
         case Fix::Abs32IatSlot: {
             if (f.arg >= cx.rec->nimp) {
                 _snprintf_s(why, why_n, _TRUNCATE, "import index %u out of range", f.arg);
@@ -250,6 +294,11 @@ static bool resolve_fixup(const ApplyCtx& cx, const Fixup& f, uintptr_t write_at
 // ---------------------------------------------------------------------------
 static bool record_enabled(const Record& r) {
     if (!config::get_bool("patches", "enable", true)) return false;
+    // The generated HD table is one feature: `[hd] enable` is the default for
+    // every record in it, and a single record can still be forced either way by
+    // its own key under [patches].
+    if (r.group && strcmp(r.group, "hd") == 0)
+        return config::get_bool("patches", r.key, config::get_bool("hd", "enable", false));
     return config::get_bool("patches", r.key, r.default_on);
 }
 
@@ -394,7 +443,7 @@ static bool apply_record(RecState& rs, uintptr_t reb) {
                 set_state(rs, St::Failed, "site %u: %s", i, why);
                 bad = true; break;
             }
-            memcpy(out + s.fx[k].ofs, &v, 4);
+            memcpy(out + s.fx[k].ofs, &v, s.fx[k].kind == Fix::Imm16GeomAdd ? 2 : 4);
         }
         if (bad) { revert(r.key); cave::rewind_to(cave_mark); return false; }
 

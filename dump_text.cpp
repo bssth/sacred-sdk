@@ -16,6 +16,7 @@
 #include "engine/build_profile.h"
 #include "patchset/patchset.h"
 #include "engine/console.h"
+#include "hd/geometry.h"
 #include "core/config.h"
 #include <cmath>
 #include <cstdio>
@@ -153,6 +154,8 @@ static DWORD WINAPI worker(LPVOID) {
         // Data-driven engine patches. Runs AFTER the legacy ones so their
         // full-length `expect` check catches any overlap instead of both
         // writing the same bytes blind.
+        // Layout numbers for the generated HD records, before they are applied.
+        hd::init_from_config();
         patchset::install();
         // `sdk ...` commands in the game's own console (dispatcher detour).
         engine::console::install();

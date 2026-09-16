@@ -30,10 +30,16 @@ enum class Fix : uint8_t {
     Rel32SiteJcc32, // arg = ignored            -> rel32 to (site_va + 6 + int32 expect[2..5])
     Abs32IatSlot,   // arg = index into Record::imports -> absolute ADDRESS OF the IAT slot
     Abs32ToStub,    // arg = stub id            -> absolute address of that stub
+    // HD geometry (hd/geometry.h). `arg` is the slot's address in ReBorn's own
+    // table, which is how the generated records name a layout value.
+    Abs32Geom,      // -> address of that slot inside our geometry block
+    Imm32GeomSet,   // -> the slot's four bytes (int or float, as the operand is)
+    Imm32GeomAdd,   // -> original imm32 at this offset + the slot's int32
+    Imm16GeomAdd,   // -> original imm16 at this offset + the slot's int32 (2-byte field)
 };
 
 struct Fixup {
-    uint16_t ofs;    // byte offset of the 4-byte field within `bytes`
+    uint16_t ofs;    // byte offset of the field within `bytes` (4 bytes, 2 for Imm16GeomAdd)
     Fix      kind;
     uint32_t arg;
 };

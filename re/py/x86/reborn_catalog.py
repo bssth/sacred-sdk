@@ -42,6 +42,15 @@ MD = Cs(CS_ARCH_X86, CS_MODE_32)
 MD.detail = True
 
 
+# Bytes ReBorn changed IN THE FILE (branch spans, NOP islands). Context around
+# one patch must not be required to match across its neighbours.
+WILD = set()
+
+
+def wild(va):
+    return va in WILD
+
+
 def region_of(va):
     if CAVE[0] <= va < CAVE[1]: return "cave"
     if TAIL[0] <= va < TAIL[1]: return "tail"
@@ -132,9 +141,18 @@ def our_candidates(dm, new_va):
 
 
 def _overlap(a, b):
-    """Share of `a`'s shapes also present in `b`, order ignored."""
+    """Share of `a`'s shapes also present in `b`, order ignored; '*' is skipped."""
+    a = [x for x in a if x != "*"]
     ca, cb = collections.Counter(a), collections.Counter(b)
     return sum(min(v, cb[k]) for k, v in ca.items()) / max(1, len(a))
+
+
+def _seq_eq(have, want):
+    return len(have) == len(want) and all(w == "*" or w == h for h, w in zip(have, want))
+
+
+def reb_shape(ins):
+    return "*" if any(wild(ins.address + k) for k in range(ins.size)) else shape(ins)
 
 
 def locate_by_shape(ours, reb, dm, site, span, n_ctx=8, win=0x1800):
@@ -155,8 +173,8 @@ def locate_by_shape(ours, reb, dm, site, span, n_ctx=8, win=0x1800):
             break
     if len(pre) < 4 or len(post) < 4:
         return None, "shape: no context"
-    want_pre = [shape(i) for i in pre]
-    want_post = [shape(i) for i in post]
+    want_pre = [reb_shape(i) for i in pre]
+    want_post = [reb_shape(i) for i in post]
     found = {}
     for cand in our_candidates(dm, site):
         lo = max(ours.text_lo, cand - win)
@@ -170,7 +188,7 @@ def locate_by_shape(ours, reb, dm, site, span, n_ctx=8, win=0x1800):
         # exact post, span walks back to an exact byte count
         L = len(want_post)
         for j in range(1, n - L + 1):
-            if shapes[j:j + L] != want_post:
+            if not _seq_eq(shapes[j:j + L], want_post):
                 continue
             b = insns[j].address
             k, tot = j, 0
@@ -185,7 +203,7 @@ def locate_by_shape(ours, reb, dm, site, span, n_ctx=8, win=0x1800):
         # exact pre, span walks forward
         L = len(want_pre)
         for k in range(0, n - L):
-            if shapes[k:k + L] != want_pre:
+            if not _seq_eq(shapes[k:k + L], want_pre):
                 continue
             a = insns[k + L - 1].address + insns[k + L - 1].size
             j, tot = addr_idx.get(a), 0
@@ -213,7 +231,7 @@ def patched_span(reb, site, ins):
 
 
 def locate_site(ours, reb, dm, site, span):
-    va, how = dm.locate_old(site, before=24, after=24, skip=span, win=0x2000)
+    va, how = dm.locate_old(site, before=24, after=24, skip=span, win=0x2000, wild=wild)
     if va is not None:
         return va, span, how
     got, how2 = locate_by_shape(ours, reb, dm, site, span)
@@ -295,6 +313,29 @@ def enum_branch_sites(reb):
     return sites
 
 
+def enum_nop_islands(reb, covered):
+    """Runs of >= 2 NOPs ReBorn left inside code, not explained by a branch span.
+
+    MSVC pads between functions with NOPs after a ret/jmp; those are dropped
+    here only when the instruction before the run ends control flow. The real
+    test is in main(): an island whose bytes in OUR build are not NOPs too.
+    """
+    T, lo = reb.text, reb.text_lo
+    out = []
+    for m in re.finditer(rb"\x90{2,}", T):
+        va, n = lo + m.start(), m.end() - m.start()
+        if va in covered:
+            continue
+        back = sweep_back(reb, va, span=32)
+        if not back:
+            continue
+        last = back[-1]
+        if last.mnemonic in ("ret", "jmp", "int3") or last.bytes[0] == 0xCC:
+            continue
+        out.append((va, n))
+    return out
+
+
 WRITE_MNEMONICS = {"mov", "add", "sub", "or", "and", "xor", "inc", "dec", "neg", "not", "movsd", "movss"}
 
 
@@ -309,22 +350,73 @@ def enum_selfpatches(reb):
         v = struct.unpack_from("<I", blob, i)[0]
         if not reb.in_text(v):
             continue
-        for back in range(1, 4):
-            st = blob_lo + i - back
-            if st in seen:
-                continue
-            ins = dis_one(reb, st)
-            if not ins or not ins.operands:
-                continue
-            op0 = ins.operands[0]
-            if op0.type != X.X86_OP_MEM or op0.mem.base or op0.mem.index:
-                continue
-            if (op0.mem.disp & 0xFFFFFFFF) != v or ins.mnemonic not in WRITE_MNEMONICS:
-                continue
-            seen.add(st)
-            out.append((st, ins, v))
-            break
+        # The instruction that HOLDS this address as its operand; decoding from a
+        # guessed offset picks `add dword` out of a `66 01 05` add word.
+        ins = host_of(reb, blob_lo + i)
+        if not ins or ins.address in seen or not ins.operands:
+            continue
+        op0 = ins.operands[0]
+        if op0.type != X.X86_OP_MEM or op0.mem.base or op0.mem.index:
+            continue
+        if (op0.mem.disp & 0xFFFFFFFF) != v or ins.mnemonic not in WRITE_MNEMONICS:
+            continue
+        seen.add(ins.address)
+        out.append((ins.address, ins, v))
     return out
+
+
+def host_of(img, va):
+    """The instruction whose operand field starts at `va`.
+
+    The write target is an operand inside an engine instruction, so its start
+    has to be recovered: decode backwards to a boundary the sweep agrees on and
+    take the instruction that spans `va`.
+    """
+    for end in range(4, 28, 2):
+        for ins in sweep_back(img, va + end, span=64):
+            if ins.address <= va < ins.address + ins.size:
+                return ins
+    return None
+
+
+def selfpatch_source(reb, writer):
+    """Where the value written by `writer` comes from.
+
+    ReBorn's init loads one layout slot into a register and then writes it into
+    a run of engine operands, so the source is the last load into that register
+    before this instruction. Returns (kind, detail):
+      ("slot", slot_va)   the register last came from a geometry slot
+      ("imm", value)      the instruction writes a constant
+      ("?", reason)       anything else - a computed x87 value, say
+    """
+    ops = writer.operands
+    if len(ops) == 2 and ops[1].type == X.X86_OP_IMM:
+        return "imm", ops[1].imm & 0xFFFFFFFF
+    if len(ops) != 2 or ops[1].type != X.X86_OP_REG:
+        return "?", "source is not a register"
+    reg = ops[1].reg
+    full = {X.X86_REG_AX: X.X86_REG_EAX, X.X86_REG_BX: X.X86_REG_EBX,
+            X.X86_REG_CX: X.X86_REG_ECX, X.X86_REG_DX: X.X86_REG_EDX}.get(reg, reg)
+    for ins in reversed(sweep_back(reb, writer.address, span=320)):
+        o = ins.operands
+        if not o or o[0].type != X.X86_OP_REG or o[0].reg != full:
+            continue
+        if ins.mnemonic == "mov" and len(o) == 2 and o[1].type == X.X86_OP_MEM \
+                and o[1].mem.base == 0 and o[1].mem.index == 0:
+            d = o[1].mem.disp & 0xFFFFFFFF
+            if HD_GLOBALS[0] <= d < HD_GLOBALS[1]:
+                return "slot", d
+            return "?", f"loaded from {d:#x}, not a layout slot"
+        # The width and height writers run before the table is filled: the
+        # register holds the value straight from the config parser, whose only
+        # constant on that path is the 1024 / 768 fallback.
+        if ins.mnemonic == "mov" and len(o) == 2 and o[1].type == X.X86_OP_IMM:
+            if (o[1].imm & 0xFFFFFFFF) == 0x400:
+                return "slot", 0xA1EFD0
+            if (o[1].imm & 0xFFFFFFFF) == 0x300:
+                return "slot", 0xA1EFD4
+        return "?", f"{ins.mnemonic} {ins.op_str}"
+    return "?", "no load found"
 
 
 # ---------------------------------------------------------------------------
@@ -332,10 +424,32 @@ def main():
     ours, reb, dm = bm.load()
     rows = []
 
-    # --- branches into ReBorn's code ------------------------------------
-    stubs = {}
+    # --- pass 1: every span ReBorn changed in the file --------------------
+    branches = []
     for site, ins, tgt, r in enum_branch_sites(reb):
         span = patched_span(reb, site, ins)
+        branches.append((site, ins, tgt, r, span))
+        WILD.update(range(site, site + span))
+    islands = enum_nop_islands(reb, WILD)
+    for va, n in islands:
+        WILD.update(range(va, va + n))
+
+    # --- NOP islands -------------------------------------------------------
+    for va_n, n in islands:
+        va, ln, how = locate_site(ours, reb, dm, va_n, n)
+        if va is not None and ours.rd(va, n) == b"\x90" * n:
+            continue                                   # alignment in both builds
+        rows.append({
+            "class": "nops", "reborn_va": va_n, "reborn_span": n, "target": None,
+            "our_va": va, "our_span": ln, "located_by": how,
+            "our_asm": ([f"{i.address:#x}: {i.mnemonic} {i.op_str}" for i in dis_range(ours, va, va + ln)]
+                        if va is not None else []),
+            "reborn_asm": [f"{va_n:#x}: nop x{n}"],
+        })
+
+    # --- branches into ReBorn's code ------------------------------------
+    stubs = {}
+    for site, ins, tgt, r, span in branches:
         kind = "call" if ins.group(X.X86_GRP_CALL) else ("jmp" if ins.mnemonic == "jmp" else "jcc")
         if tgt not in stubs:
             stubs[tgt] = walk_stub(reb, tgt, r)
@@ -352,13 +466,11 @@ def main():
     for st, ins, tva in enum_selfpatches(reb):
         # the written address is inside an instruction; find the instruction
         # that contains it in ReBorn, then that instruction in ours
-        host = None
-        for back in range(0, 12):
-            h = dis_one(reb, tva - back)
-            if h and h.address + h.size > tva and sweep_back(reb, h.address, span=32):
-                host = h
-                break
+        host = host_of(reb, tva)
+        src_kind, src_val = selfpatch_source(reb, ins)
         row = {"class": "selfpatch", "writer_va": st, "writer_asm": f"{ins.mnemonic} {ins.op_str}",
+               "writer_op": ins.mnemonic, "writer_width": ins.operands[0].size,
+               "src": src_kind, "src_val": src_val,
                "reborn_target": tva, "reborn_host": None, "our_host": None, "our_target": None,
                "located_by": None}
         if host:
@@ -379,7 +491,32 @@ def main():
                 row["field_equal"] = ours.rd(row["our_target"], 4) == reb.rd(tva, 4)
         rows.append(row)
 
+    # --- relevance ------------------------------------------------------
+    # "hd"  : the site itself is geometry work - a stub that reads the geometry
+    #         globals, or a run-time operand write (all of ReBorn's are layout).
+    # "hd?" : an otherwise unexplained site in the same function of OUR build as
+    #         an "hd" site (clamps and widenings next to a relocated constant).
+    # "other": everything else - Thorium's fixes, balance, QoL; out of HD scope.
+    import scan
+    for r in rows:
+        our = r.get("our_target") if r["class"] == "selfpatch" else r.get("our_va")
+        f = scan.gh_func_of(our) if our is not None else None
+        r["our_func"] = f
+        r["our_func_name"] = scan.gh_name(our) if f is not None else None
+        if r["class"] == "selfpatch":
+            r["scope"] = "hd"
+        elif r["class"] == "nops":
+            r["scope"] = "other"
+        else:
+            r["scope"] = "hd" if stubs[r["target"]]["globals"] else "other"
+    hd_funcs = {r["our_func"] for r in rows if r["scope"] == "hd" and r["our_func"] is not None}
+    for r in rows:
+        if r["scope"] == "other" and r["our_func"] in hd_funcs:
+            r["scope"] = "hd?"
+
     # --- report ---------------------------------------------------------
+    print("scope:", dict(collections.Counter((r["class"], r["scope"]) for r in rows)))
+    print("functions of ours with an hd site:", len(hd_funcs))
     cnt = collections.Counter(r["class"] for r in rows)
     loc = collections.Counter((r["class"], (r.get("located_by") or "none").split(":")[0].split(";")[0])
                               for r in rows)
@@ -398,6 +535,11 @@ def main():
                         f"  ours {r['our_target'] and hex(r['our_target'])}  ({r['located_by']})\n")
                 f.write(f"- writer: `{r['writer_asm']}`\n- reborn host: `{r['reborn_host']}`\n"
                         f"- our host: `{r['our_host']}`  field_equal={r.get('field_equal')}\n\n")
+                continue
+            if r["class"] == "nops":
+                f.write(f"## nops  reborn {r['reborn_va']:#x}+{r['reborn_span']}  ->  "
+                        f"ours {r['our_va'] and hex(r['our_va'])}+{r['our_span']}  ({r['located_by']})\n")
+                f.write("- ours:   `" + " ; ".join(r["our_asm"]) + "`\n\n")
                 continue
             s = stubs[r["target"]]
             f.write(f"## {r['class']}  reborn {r['reborn_va']:#x}+{r['reborn_span']}  ->  "

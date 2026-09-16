@@ -199,14 +199,15 @@ class DeltaMap:
                 ds.append(rr[j][2])
         return ds
 
-    def locate(self, src, dst, src_va, before=24, after=24, skip=0, win=0x3000, deltas=()):
+    def locate(self, src, dst, src_va, before=24, after=24, skip=0, win=0x3000, deltas=(), wild=None):
         """Find in `dst` the address matching `src_va` in `src`, proven by context.
 
         The signature is `before` bytes ending at src_va plus `after` bytes
         starting at src_va+skip; the `skip` bytes in between are allowed to
-        differ (that is where a patch sits). Candidates: every delta in
-        `deltas` first, then a masked search within +-win of each. Returns
-        (dst_va, how) or (None, reason).
+        differ (that is where a patch sits). `wild(va)`, if given, names further
+        `src` bytes to ignore - other patches close enough to fall into this
+        one's context. Candidates: every delta in `deltas` first, then a masked
+        search within +-win of each. Returns (dst_va, how) or (None, reason).
         """
         # Mask the whole stretch at once, 3 bytes wider on each side, so an
         # absolute address straddling a window edge is still recognised as one.
@@ -215,6 +216,10 @@ class DeltaMap:
         if whole is None:
             return None, "unreadable"
         mwhole = mask_of(whole)
+        if wild:
+            for k in range(len(whole)):
+                if wild(whole_lo + k):
+                    mwhole[k] = 0
         pre, mpre = whole[3:3 + before], mwhole[3:3 + before]
         post, mpost = whole[3 + before + skip:3 + before + skip + after], \
                       mwhole[3 + before + skip:3 + before + skip + after]
