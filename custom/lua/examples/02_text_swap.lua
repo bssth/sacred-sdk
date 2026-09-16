@@ -12,11 +12,11 @@
 -- Use `gsub_strings` if you only want to touch decoded-string args.
 --
 -- To deploy:
---   1. Run `python sdk/re/py/funkcode_decompile_lua.py
---          bin/TYPE_NPC_SERAPHIM/FunkCode.bin
---          -o custom/lua/_vanilla/bin/TYPE_NPC_SERAPHIM/FunkCode.lua`
---      (this one-time step writes the 23 MB vanilla snapshot.)
---   2. Save THIS file to `custom/lua/bin/TYPE_NPC_SERAPHIM/FunkCode.lua`.
+--   1. Nothing to prepare: `v.load` decompiles the game's own
+--      bin/TYPE_NPC_SERAPHIM/FunkCode.bin on the spot (lib/vanilla.lua).
+--   2. Save THIS file to `custom/lua/bin/TYPE_NPC_SERAPHIM/FunkCode.lua`. It
+--      returns the whole vanilla script with the swaps applied, which is what
+--      that path needs: the baked file replaces the game's FunkCode.bin.
 --   3. Launch Sacred. Bake takes ~2.5 s; in-game you'll see the swap.
 
 local v = require "vanilla"

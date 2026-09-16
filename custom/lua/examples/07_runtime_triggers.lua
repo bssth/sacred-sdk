@@ -94,7 +94,10 @@ q.on_any_once(
 -- end)
 
 -- ============================================================
--- Examples file returns an empty record list. Put your real mod records
--- in custom/lua/bin/<class>/<name>.lua.
+-- This file only registers handlers, so it returns an empty record list.
+-- A mod like it goes in custom/lua/mods/<name>.lua, a folder that mirrors
+-- no game file. Saved at a game script's path such as
+-- custom/lua/bin/<class>/FunkCode.lua, its empty output would replace that
+-- script.
 -- ============================================================
 return {}

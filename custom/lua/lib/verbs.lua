@@ -6,7 +6,9 @@
 -- record string. Run it now with actions.lua, or put it into a named section
 -- (sections.lua S.define) that a button, a counter or a timer runs, so the
 -- engine does it with no Lua in between. Dialog and objective builders live in
--- sections.lua; gold is reward.give_gold.
+-- sections.lua. Gold is Vb.add_gold below: A.run(Vb.add_gold(500)) pays now.
+-- reward.give_gold only builds a record for a baked script and pays nothing
+-- when called from a button, a counter or a section handler.
 --
 --   local Vb = require "verbs"
 --   local A  = require "actions"

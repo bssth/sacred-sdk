@@ -41,10 +41,11 @@
 --   passive     = class-default stance + wake (only retaliates)
 -- ----------------------------------------------------------------------
 
--- IMPORTANT: the SDK bakes/executes EVERY .lua under custom/lua/** —
--- examples included. So this file is INERT by default (it would spawn
--- duplicate NPCs on top of your real mod otherwise). Flip ENABLED=true
--- only if you want to see this example run standalone.
+-- IMPORTANT: the bake skips examples/, so this file never runs where it
+-- ships. To try it, copy it to custom/lua/mods/<name>.lua (a runtime mod
+-- returns {}, so keep it out of custom/lua/bin/, where it would replace a
+-- game script) and flip ENABLED=true. It is INERT by default so that a
+-- copy does not spawn duplicate NPCs on top of your real mod.
 local ENABLED = false
 if not ENABLED then return {} end
 

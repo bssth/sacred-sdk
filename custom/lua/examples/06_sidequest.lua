@@ -17,11 +17,8 @@
 --      hang off a town NPC class like TYPE_NPC_GLADIATOR or
 --      TYPE_NPC_SERAPHIM. Copy this file to:
 --        custom/lua/bin/TYPE_NPC_<class>/FunkCode.lua
---   2. Make sure the vanilla snapshot for that class is decompiled to
---      custom/lua/_vanilla/bin/TYPE_NPC_<class>/FunkCode.lua (one-time):
---        python sdk/re/py/funkcode_decompile_lua.py ^
---               bin/TYPE_NPC_<class>/FunkCode.bin ^
---               -o custom/lua/_vanilla/bin/TYPE_NPC_<class>/FunkCode.lua
+--   2. Nothing to prepare for the vanilla part: `v.load` decompiles the
+--      game's own bin/TYPE_NPC_<class>/FunkCode.bin on the spot.
 --   3. Edit the trigger names, QUEST_ID, and dialogue text below.
 --   4. Launch Sacred. Bake takes 2-3 s on first run.
 --
@@ -155,8 +152,9 @@ local quest = q.script {
 -- intact, then concatenate our new records onto the end. The runtime walks
 -- the whole record list and triggers fire by name regardless of position.
 --
--- If you'd rather REPLACE the whole class (rare), drop the v.load and just
--- `return quest`.
+-- Do not drop the v.load and `return quest` on its own: the baked file
+-- replaces the class's whole FunkCode.bin, so every vanilla quest and dialog
+-- of that class would be gone.
 
 local recs = v.load("bin/" .. HOST_CLASS .. "/FunkCode")
 for _, r in ipairs(quest) do recs[#recs+1] = r end

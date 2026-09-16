@@ -32,10 +32,12 @@
 --                  a wrong guess can't crash. Treat as experimental.
 -- ----------------------------------------------------------------------
 
--- IMPORTANT: the SDK executes EVERY .lua under custom/lua/** — examples
--- included. INERT by default so it doesn't spawn duplicate NPCs over your
--- real mod (that's what caused the "three Captains" cluster). Flip
--- ENABLED=true to run this example standalone.
+-- IMPORTANT: the bake skips examples/, so this file never runs where it
+-- ships. To try it, copy it to custom/lua/mods/<name>.lua (a runtime mod
+-- returns {}, so keep it out of custom/lua/bin/, where it would replace a
+-- game script) and flip ENABLED=true. INERT by default so a copy doesn't
+-- spawn duplicate NPCs over your real mod (that's what caused the "three
+-- Captains" cluster, back when the bake still ran examples/).
 local ENABLED = false
 if not ENABLED then return {} end
 
