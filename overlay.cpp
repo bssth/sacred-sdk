@@ -159,6 +159,30 @@ static bool          g_last_f7  = false;
 // Free-text label typed in the overlay; F7 stamps it into the log line
 // so saved positions are self-documenting.
 static char          g_pos_label[64] = "";
+
+// Put ASCII text on the Windows clipboard (CF_TEXT; Windows synthesizes the
+// Unicode format). Owned by the overlay window so EmptyClipboard doesn't
+// leave a NULL owner; retries a few times in case another app holds it.
+static bool copy_to_clipboard(const char* text) {
+    size_t len = strlen(text) + 1;
+    bool opened = false;
+    for (int i = 0; i < 5 && !(opened = OpenClipboard(g_hwnd) != 0); ++i)
+        Sleep(10);
+    if (!opened) return false;
+    bool ok = false;
+    if (HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, len)) {
+        if (char* p = static_cast<char*>(GlobalLock(h))) {
+            memcpy(p, text, len);
+            GlobalUnlock(h);
+            EmptyClipboard();
+            ok = SetClipboardData(CF_TEXT, h) != nullptr;
+        }
+        if (!ok) GlobalFree(h);   // on success the clipboard owns it
+    }
+    CloseClipboard();
+    return ok;
+}
+
 static bool          g_last_f8  = false;
 static bool          g_last_f9  = false;
 static bool          g_last_f10 = false;
@@ -656,7 +680,7 @@ static void draw_ui() {
             int32_t wx = 0, wy = 0;
             if (sdk::player::world_pos(&wx, &wy)) {
                 ImGui::TextColored(ImVec4(0.7f, 1.0f, 0.7f, 1.0f),
-                    "map xy  : %d, %d   KompassPos (F7 dumps; paste into KX,KY)", wx, wy);
+                    "map xy  : %d, %d   KompassPos (F7 logs + copies; paste into KX,KY)", wx, wy);
             } else {
                 ImGui::Text("world   : (unavailable)");
             }
@@ -812,17 +836,22 @@ static DWORD WINAPI thread_main(LPVOID) {
         // AFTER the world is fully loaded (walk around, open a quest) to
         // see how many entries exist and whether a custom quest_id
         // survived vanilla's savegame load.
-        // F7 edge: dump live hero world coords to the log. Stand where you
-        // want a quest marker / screenshot, press F7, paste the numbers
-        // into questbook_set_kompass(KX,KY,...).
+        // F7 edge: dump live hero world coords to the log and copy them to
+        // the clipboard as "X, Y". Stand where you want a quest marker /
+        // screenshot, press F7, paste the numbers into KX,KY /
+        // questbook_set_kompass(KX,KY,...).
         bool f7 = (GetAsyncKeyState(VK_F7) & 0x8000) != 0;
         if (f7 && !g_last_f7) {
             int32_t wx = 0, wy = 0;
             if (sdk::player::world_pos(&wx, &wy)) {
+                char clip[32];
+                _snprintf_s(clip, sizeof(clip), _TRUNCATE, "%d, %d", wx, wy);
+                bool copied = copy_to_clipboard(clip);
                 sdk_log("[overlay] F7 -> hero map pos (KompassPos): "
-                        "KX=%d KY=%d  label='%s'  (paste into KX,KY / "
-                        "questbook_set_kompass/marker)",
-                        wx, wy, g_pos_label[0] ? g_pos_label : "(none)");
+                        "KX=%d KY=%d  label='%s'  clipboard=%s  (paste into "
+                        "KX,KY / questbook_set_kompass/marker)",
+                        wx, wy, g_pos_label[0] ? g_pos_label : "(none)",
+                        copied ? "ok" : "FAILED");
             } else {
                 sdk_log("[overlay] F7 -> hero map pos unavailable "
                         "(no player loaded)");
