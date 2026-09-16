@@ -229,6 +229,28 @@ static bool resolve_fixup(const ApplyCtx& cx, const Fixup& f, uintptr_t write_at
             *out = (uint32_t)(int32_t)(tgt - (write_at + 4));
             return true;
         }
+        case Fix::Abs32ToVA:
+            *out = (uint32_t)(cx.reb + f.arg);
+            return true;
+
+        case Fix::Abs32Const: {
+            // Relocated stubs sometimes read a float that ReBorn kept somewhere we
+            // have no equivalent of (its own code tail, even its PE header). One
+            // pooled read-only copy per distinct value serves every record.
+            static uint32_t pool[64];
+            static int      pool_n = 0;
+            int k = 0;
+            while (k < pool_n && pool[k] != f.arg) ++k;
+            if (k == pool_n) {
+                if (pool_n == 64) {
+                    _snprintf_s(why, why_n, _TRUNCATE, "constant pool full");
+                    return false;
+                }
+                pool[pool_n++] = f.arg;
+            }
+            *out = (uint32_t)(uintptr_t)&pool[k];
+            return true;
+        }
         case Fix::Abs32Geom: {
             void* p = hd::slot_addr(f.arg);
             if (!p) {

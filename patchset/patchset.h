@@ -36,6 +36,9 @@ enum class Fix : uint8_t {
     Imm32GeomSet,   // -> the slot's four bytes (int or float, as the operand is)
     Imm32GeomAdd,   // -> original imm32 at this offset + the slot's int32
     Imm16GeomAdd,   // -> original imm16 at this offset + the slot's int32 (2-byte field)
+    // Relocated code that reads engine data or a constant.
+    Abs32ToVA,      // arg = engine VA          -> that VA, rebased
+    Abs32Const,     // arg = 4 raw bytes        -> address of a read-only copy in our DLL
 };
 
 struct Fixup {
