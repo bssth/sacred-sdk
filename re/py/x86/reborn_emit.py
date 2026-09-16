@@ -32,6 +32,7 @@ import os, re, json, struct, collections
 from capstone import Cs, CS_ARCH_X86, CS_MODE_32
 from capstone import x86 as X
 import buildmap as bm
+import reborn_catalog as rc
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RE_DIR = os.path.normpath(os.path.join(HERE, "..", ".."))
@@ -172,10 +173,24 @@ class Mapper:
                     votes[struct.unpack("<I", self.o.rd(got, 4))[0]] += 1
             seen += 1
             pos = self.r.text.find(key, pos + 1)
-        if not votes:
+        if votes:
+            (best, n), = votes.most_common(1)
+            return best if n == sum(votes.values()) else None     # unanimous or nothing
+        return self.data_by_content(va)
+
+    def data_by_content(self, va):
+        """Initialised data nobody else references: find the same bytes in our .data.
+
+        ReBorn's .data sits 0x1FF8..0x2080 below ours. A 32-byte window around the
+        address, with enough non-zero bytes to mean something, must occur at
+        exactly one shift in that neighbourhood."""
+        if self.r.sec_of(va) not in (".data", ".rdata"):
             return None
-        (best, n), = votes.most_common(1)
-        return best if n == sum(votes.values()) else None     # unanimous or nothing
+        want = self.r.rd(va - 8, 32)
+        if not want or len(want) < 32 or sum(1 for b in want if b) < 8:
+            return None
+        hits = [d for d in range(0x1E00, 0x2200, 4) if self.o.rd(va - 8 + d, 32) == want]
+        return va + hits[0] if len(hits) == 1 else None
 
     def readonly_const(self, va, size):
         """ReBorn bytes of a constant nobody writes (.rdata outside the IAT, code, header, tail)."""
@@ -444,6 +459,98 @@ def align_cluster(ours, reb, dm, lo, hi, wild):
     return pre, post - pre, fx
 
 
+def find_rewrite_block(ours, reb, dm, t, branch_wild):
+    """The region around `t` that ReBorn rewrote in place, when it kept its length.
+
+    Aligns on clean context some way before `t`, walks both builds instruction by
+    instruction to the first difference, then on to the first ReBorn instruction
+    past `t` where both builds agree again at the same distance. Returns
+    ((reb_start, reb_end, our_start), None) or (None, why)."""
+    delta = anchor = None
+    for back in (32, 64, 112, 176, 256):
+        end = t - back
+        if not rc.sweep_back(reb, end, span=48):
+            continue
+        a, _ = dm.locate_old(end, before=20, after=0, win=0x3000, wild=branch_wild)
+        if a is not None:
+            anchor, delta = end, a - end
+            break
+    if delta is None:
+        return None, "no aligned context before it"
+    start = None
+    for ins in dis(reb, anchor, t - anchor + 16):
+        if ins.address > t:
+            break
+        if any(branch_wild(ins.address + k) for k in range(ins.size)):
+            continue                                  # another patch, ported on its own
+        mine = next(MD.disasm(ours.rd(ins.address + delta, 16), ins.address + delta), None)
+        rb = bytes(ins.bytes)
+        if mine is not None and mine.size == ins.size and bm.masked_eq(bytes(mine.bytes), rb, bm.mask_of(rb)):
+            continue
+        start = ins.address
+        break
+    if start is None:
+        return None, "no difference before it"
+    our_bounds = {i.address for i in dis(ours, start + delta, 224)}
+    for ins in dis(reb, start, 224):
+        y = ins.address
+        if y <= t:
+            continue
+        if y - start > 192:
+            break
+        want = reb.rd(y, 12)
+        if y + delta in our_bounds and bm.masked_eq(ours.rd(y + delta, 12), want, bm.mask_of(want)):
+            return (start, y, start + delta), None
+    return None, "the two builds do not agree again after it"
+
+
+def port_block(ours, reb, mp, blk, found, is_layout):
+    """Fixups that make ReBorn's rewritten bytes [start, end) run at our start."""
+    start, end, our = blk
+    delta = our - start
+    fx = []
+    for ins in dis(reb, start, end - start):
+        base = ins.address - start
+        t = branch_target(ins)
+        if t is not None:
+            if start <= t < end or (ins.imm_size == 1) or abs(t - start) < 0x1000:
+                continue            # inside, or within the aligned function: the distance holds
+            m = mp.code(t)
+            if m is None:
+                return None, f"cannot map branch target {t:#x}"
+            fx.append((base + ins.imm_offset, "Rel32ToVA", m))
+            continue
+        for op in ins.operands:
+            if abs_mem(op):
+                v, off = op.mem.disp & 0xFFFFFFFF, base + ins.disp_offset
+                if is_layout(v):
+                    fx.append((off, "Abs32Geom", v)); continue
+                if v in mp.iat_r:
+                    m = mp.iat_map.get(v)
+                    if m is None:
+                        return None, f"import {mp.iat_r[v]} missing in our build"
+                    fx.append((off, "Abs32ToVA", m)); continue
+                m = mp.data(v)
+                if m is None:
+                    c = mp.readonly_const(v, op.size)
+                    if c is not None and op.size == 4:
+                        fx.append((off, "Abs32Const", struct.unpack("<I", c)[0])); continue
+                    return None, f"cannot map data {v:#x}"
+                fx.append((off, "Abs32ToVA", m))
+            elif op.type == X.X86_OP_IMM and IMAGE[0] <= (op.imm & 0xFFFFFFFF) < IMAGE[1]:
+                v = op.imm & 0xFFFFFFFF
+                m = mp.data(v)
+                if m is None:
+                    return None, f"cannot map address operand {v:#x}"
+                fx.append((base + ins.imm_offset, "Abs32ToVA", m))
+    kinds = {("set", 4): "Imm32GeomSet", ("set", 2): "Imm16GeomSet",
+             ("add", 4): "Imm32GeomAdd", ("add", 2): "Imm16GeomAdd"}
+    for tt, f in found.items():
+        if start <= tt < end:
+            fx.append((tt - start, kinds[(f["kind"], f["width"])], f["slot"]))
+    return fx, None
+
+
 def main():
     import scan
     import reborn_catalog as rc
@@ -470,6 +577,7 @@ def main():
     located = {}                             # ReBorn VA -> our func, for every located layout site
     tally = collections.Counter()
 
+    blockable = []                           # (ReBorn VA, label, why) for find_rewrite_block
     def leave_out(reb_va, our_va, label, why, func=None):
         rejected.append((our_va, label, why))
         unported.append((reb_va, func))
@@ -498,13 +606,13 @@ def main():
         else:
             our_host, _, _ = rc.locate_site(ours, reb, dm, host.address, host.size)
         if our_host is None:
-            leave_out(t, None, label, "not located"); continue
+            blockable.append((t, label, "not located")); continue
         func = scan.gh_func_of(our_host)
         name = scan.gh_name(our_host) if func is not None else None
         located[t] = func
         hb = reb.rd(host.address, host.size)
         if not bm.masked_eq(ours.rd(our_host, host.size), hb, bm.mask_of(hb)):
-            leave_out(t, our_host, label, "ReBorn changed the host instruction itself", func); continue
+            blockable.append((t, label, "ReBorn changed the host instruction itself")); continue
         ofs = t - host.address
         ins = next(MD.disasm(ours.rd(our_host, 16), our_host), None)
         field_ok = ins is not None and (
@@ -612,7 +720,7 @@ def main():
         va, ln, fx = align_cluster(ours, reb, dm, lo, hi, lambda a: a in rc.WILD)
         if va is None:
             for ins in cl:
-                leave_out(ins.address, None, f"slot ref {ins.address:#x}", f"block {lo:#x}..{hi:#x}: {fx}")
+                blockable.append((ins.address, f"slot ref {ins.address:#x}", f"block {lo:#x}..{hi:#x}: {fx}"))
             continue
         func = scan.gh_func_of(va)
         name = scan.gh_name(va) if func is not None else None
@@ -633,6 +741,21 @@ def main():
         if verdict[0] == "skip":
             continue
         func = r.get("our_func")
+        if our is None and r["class"].endswith("jmp"):
+            # ReBorn sometimes left the tail of the instructions it replaced as
+            # dead bytes after its jmp instead of NOPs, so the catalogue saw a
+            # 5-byte span followed by garbage. The stub's jump back says where
+            # the replaced instructions really end.
+            exits = [e for e in d["stubs"][hex(r["target"])]["exits"] if isinstance(e, int)]
+            back = [e for e in exits if site + span < e <= site + 32]
+            if len(back) == 1:
+                va, ln, how = rc.locate_site(ours, reb, dm, site, back[0] - site)
+                if va is not None:
+                    span = back[0] - site
+                    r = dict(r, reborn_span=span, our_va=va, our_span=ln, located_by=how,
+                             our_func=scan.gh_func_of(va),
+                             our_func_name=scan.gh_name(va) if scan.gh_func_of(va) is not None else None)
+                    our, func = va, r["our_func"]
         if our is not None:
             located[site] = func
         if our is None:
@@ -668,6 +791,39 @@ def main():
                                     " ; ".join(f"{i.mnemonic} {i.op_str}" for i in mine)))
         tally["stub relocated"] += 1
 
+    # --- blocks ReBorn rewrote in place, same length ----------------------------
+    branch_set = set()
+    for lo, n in wild:
+        branch_set.update(range(lo, lo + n))
+    branch_wild = lambda a: a in branch_set
+    blocks = {}
+    for t, label, why in sorted(blockable):
+        if any(b[0] <= t < b[1] for b in blocks):
+            blocks[next(b for b in blocks if b[0] <= t < b[1])].append((t, label))
+            continue
+        blk, err = find_rewrite_block(ours, reb, dm, t, branch_wild)
+        if blk is None:
+            leave_out(t, None, label, f"{why}; no rewritten block: {err}")
+            continue
+        blocks.setdefault(blk, []).append((t, label))
+    for blk, members in blocks.items():
+        fx, err = port_block(ours, reb, mp, blk, found, is_layout)
+        start, end, our_start = blk
+        if fx is None:
+            for t, label in members:
+                leave_out(t, None, label, f"block {start:#x}..{end:#x}: {err}")
+            continue
+        func = scan.gh_func_of(our_start)
+        name = scan.gh_name(our_start) if func is not None else None
+        for t, _ in members:
+            located[t] = func
+        n = end - start
+        items[(func, name)].append(dict(
+            va=our_start, len=n, expect=ours.rd(our_start, n), new=reb.rd(start, n), fx=fx, stub=None,
+            block=True, note=f"ReBorn's rewrite of {n} B ({start:#x}): " +
+                             " ; ".join(f"{i.mnemonic} {i.op_str}" for i in dis(reb, start, n))))
+        tally["rewritten block ported"] += 1
+
     # --- a function is patched whole or not at all ------------------------------
     # A layout site left out makes its function inconsistent (the crash of
     # 2026-09-16: a loop bound moved to W while its step stayed 256 walked off a
@@ -693,6 +849,11 @@ def main():
     # --- emit ---------------------------------------------------------------
     out, rows = [], []
     for (func, name), sites in sorted(items.items(), key=lambda kv: min(s["va"] for s in kv[1])):
+        # a ported block carries everything ReBorn did inside it
+        blocks_here = [x for x in sites if x.get("block")]
+        sites = [x for x in sites if x.get("block") or not any(
+            b["va"] <= x["va"] < b["va"] + b["len"] or x["va"] <= b["va"] < x["va"] + x["len"]
+            for b in blocks_here)]
         merged = {}
         for s in sorted(sites, key=lambda s: s["va"]):
             m = merged.get(s["va"])

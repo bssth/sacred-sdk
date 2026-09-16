@@ -74,7 +74,7 @@ static constexpr int kGeneratedN = 0;
 // the built-in fixes.
 constexpr int MAX_RECORDS = 512;
 constexpr int MAX_JOURNAL = 2048;
-constexpr int MAX_SITE_LEN = 64;
+constexpr int MAX_SITE_LEN = 256;   // a ported ReBorn rewrite can span a few dozen instructions
 
 struct RecState {
     const Record* rec;
@@ -204,6 +204,7 @@ struct ApplyCtx {
     uintptr_t stub_addr[256];   // by stub id
     uintptr_t site_va;          // live VA of the site being emitted (0 for stubs)
     const uint8_t* site_expect; // original bytes of that site
+    const uint8_t* site_bytes;  // replacement bytes of that site, before fixups (null for stubs)
 };
 
 static bool resolve_fixup(const ApplyCtx& cx, const Fixup& f, uintptr_t write_at,
@@ -298,13 +299,16 @@ static bool resolve_fixup(const ApplyCtx& cx, const Fixup& f, uintptr_t write_at
                 _snprintf_s(why, why_n, _TRUNCATE, "geometry slot %08x unavailable", f.arg);
                 return false;
             }
-            if (!cx.site_expect) {
-                _snprintf_s(why, why_n, _TRUNCATE, "geometry operand fixup with no anchor site");
+            if (!cx.site_bytes) {
+                _snprintf_s(why, why_n, _TRUNCATE, "geometry operand fixup outside a site");
                 return false;
             }
+            // The operand the value is added to is the one the site WRITES. For an
+            // operand patch that is our own instruction; for a ported block it is
+            // the constant ReBorn's rewrite put there.
             const bool w16 = (f.kind == Fix::Imm16GeomAdd || f.kind == Fix::Imm16GeomSet);
             uint32_t orig = 0;
-            memcpy(&orig, cx.site_expect + f.ofs, w16 ? 2 : 4);
+            memcpy(&orig, cx.site_bytes + f.ofs, w16 ? 2 : 4);
             if (f.kind == Fix::Imm32GeomSet) {
                 *out = slot;
             } else if (f.kind == Fix::Imm16GeomSet) {
@@ -314,9 +318,9 @@ static bool resolve_fixup(const ApplyCtx& cx, const Fixup& f, uintptr_t write_at
             } else {
                 *out = (uint32_t)(uint16_t)((int16_t)orig + (int32_t)slot);
             }
-            // At 1024x768 every layout value equals the constant the engine was
-            // compiled with, so a mismatch means our formula for that slot is
-            // wrong. Refuse rather than write a number nobody has checked.
+            // At 1024x768 every layout value equals the constant in the operand,
+            // so a mismatch means our formula for that slot is wrong. Refuse
+            // rather than write a number nobody has checked.
             if (hd::width() == 1024 && hd::height() == 768 && *out != orig) {
                 _snprintf_s(why, why_n, _TRUNCATE,
                             "geometry slot %08x = %08x but the original operand is %08x at 1024x768",
@@ -453,9 +457,11 @@ static bool apply_record(RecState& rs, uintptr_t reb) {
         if (st.anchor_site < r.nsites) {
             cx.site_va     = reb + r.sites[st.anchor_site].va;
             cx.site_expect = r.sites[st.anchor_site].expect;
+            cx.site_bytes  = nullptr;
         } else {
             cx.site_va     = 0;
             cx.site_expect = nullptr;
+            cx.site_bytes  = nullptr;
         }
         for (uint8_t k = 0; k < st.nfx; ++k) {
             uint32_t v = 0;
@@ -493,6 +499,7 @@ static bool apply_record(RecState& rs, uintptr_t reb) {
         memcpy(out, s.bytes, s.len);
         cx.site_va = at;
         cx.site_expect = s.expect;
+        cx.site_bytes = s.bytes;
         bool bad = false;
         for (uint8_t k = 0; k < s.nfx; ++k) {
             uint32_t v = 0;
