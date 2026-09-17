@@ -211,6 +211,20 @@ static uintptr_t api_hero_creature() {
     return c;
 }
 
+// sacred.hero_type() -> integer | nil: the active hero's creature type, the
+// cCreature+0x10 low word npc_info reads (1 Seraphim, 2 Gladiator, 3 Battle Mage,
+// 4 Dark Elf, 5 Wood Elf, 6 and 7 Vampiress, 8 Dwarf, 9 Daemon). nil with no hero.
+static int l_sacred_hero_type(lua_State* L) {
+    uintptr_t hero = api_hero_creature();
+    uint32_t t = 0;
+    if (!hero || !engine::mem::read<uint32_t>(hero + 0x10, &t) || !(t & 0xFFFF)) {
+        lua_pushnil(L);
+        return 1;
+    }
+    lua_pushinteger(L, (lua_Integer)(t & 0xFFFF));
+    return 1;
+}
+
 // sacred.peek_u32(va) -> integer | nil   (va = full engine VA, rebased)
 static int l_sacred_peek_u32(lua_State* L) {
     uintptr_t va = (uintptr_t)(lua_Unsigned)luaL_checkinteger(L, 1);
@@ -648,6 +662,7 @@ void install_data_api(lua_State* L) {
     lua_pushcfunction(L, l_sacred_globalres);      lua_setfield(L, -2, "globalres");
     lua_pushcfunction(L, l_sacred_peek_u32);       lua_setfield(L, -2, "peek_u32");
     lua_pushcfunction(L, l_sacred_hero_slot);      lua_setfield(L, -2, "hero_slot");
+    lua_pushcfunction(L, l_sacred_hero_type);      lua_setfield(L, -2, "hero_type");
     lua_pushcfunction(L, l_sacred_nearby_list);    lua_setfield(L, -2, "nearby_list");
     lua_pushcfunction(L, l_sacred_hero_party);     lua_setfield(L, -2, "hero_party");
     lua_pushcfunction(L, l_sacred_npc_ai);         lua_setfield(L, -2, "npc_ai");

@@ -313,18 +313,23 @@ static uintptr_t     g_ld_target = 0x0046F9B0;                   // FUN_0046f9b0
 static bool          g_ld_patched = false, g_ld_warned = false;
 static bool          g_ng_spawn_on = false;
 static int           g_ng_spawn_kx = 0, g_ng_spawn_ky = 0;
+static unsigned long g_ng_spawn_types = 0;                       // hero types, 0 = any
 
 // Runs inside the engine's new-game world build, before the start placement.
+// The hero's class is checked when the start teleport comes, in the hook: the
+// teleport's own creature is the hero, whatever this build left in ctx+0x14.
 extern "C" void __cdecl sdk_newgame_build() {
     if (!g_ng_spawn_on) return;
-    g_tp_ov.kx       = g_ng_spawn_kx;
-    g_tp_ov.ky       = g_ng_spawn_ky;
-    g_tp_ov.lvl_set  = false;              // keep the engine's own level
-    g_tp_ov.until_ms = 0;                  // one-shot
-    g_tp_ov.armed    = true;
-    g_tp_log         = 0;
-    g_tp_arm_loads   = g_qs_loads;
-    sdk_log("[tp] new game: start-placement hijack armed -> (%d,%d)", g_ng_spawn_kx, g_ng_spawn_ky);
+    g_tp_ov.kx         = g_ng_spawn_kx;
+    g_tp_ov.ky         = g_ng_spawn_ky;
+    g_tp_ov.lvl_set    = false;            // keep the engine's own level
+    g_tp_ov.until_ms   = 0;                // one-shot
+    g_tp_ov.hero_types = g_ng_spawn_types;
+    g_tp_ov.armed      = true;
+    g_tp_log           = 0;
+    g_tp_arm_loads     = g_qs_loads;
+    sdk_log("[tp] new game: start-placement hijack armed -> (%d,%d), hero types %08lX",
+            g_ng_spawn_kx, g_ng_spawn_ky, g_ng_spawn_types);
 }
 
 __declspec(naked) static void ld_newgame_thunk() {
@@ -379,15 +384,27 @@ static int l_sacred_world_alive(lua_State* L) {
     return 1;
 }
 
-// sacred.set_new_game_spawn(kx, ky) -> true: every new game puts the hero at
-// (kx, ky) (KompassPos) instead of the campaign start; savegame loads are never
-// moved. sacred.set_new_game_spawn() switches it off.
+// sacred.set_new_game_spawn(kx, ky [, hero_types]) -> true: every new game puts
+// the hero at (kx, ky) (KompassPos) instead of the campaign start; savegame loads
+// are never moved. hero_types = { 6, 7 } limits it to heroes of those creature
+// types (sacred.hero_type()); omitted, every hero. sacred.set_new_game_spawn()
+// switches it off.
 static int l_sacred_set_new_game_spawn(lua_State* L) {
     if (lua_isnoneornil(L, 1)) {
         g_ng_spawn_on = false;
     } else {
         g_ng_spawn_kx = (int)luaL_checkinteger(L, 1);
         g_ng_spawn_ky = (int)luaL_checkinteger(L, 2);
+        g_ng_spawn_types = 0;
+        if (lua_istable(L, 3)) {
+            lua_Integer n = (lua_Integer)lua_rawlen(L, 3);
+            for (lua_Integer i = 1; i <= n; i++) {
+                lua_rawgeti(L, 3, i);
+                lua_Integer t = lua_tointeger(L, -1);
+                lua_pop(L, 1);
+                if (t > 0 && t < 32) g_ng_spawn_types |= 1ul << t;
+            }
+        }
         g_ng_spawn_on = true;
     }
     lua_pushboolean(L, 1);

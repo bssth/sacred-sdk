@@ -1330,6 +1330,8 @@ struct TpOverride {
     volatile bool armed; volatile int kx, ky;
     volatile bool lvl_set; volatile int lvl;
     volatile unsigned long until_ms;   // rewrite EVERY hero tp until this
+    volatile unsigned long hero_types; // bit per hero creature type (1 << type) the
+                                       // hijack is for; 0 = any hero
 };
 extern TpOverride    g_tp_ov;
 extern volatile long g_tp_log;
@@ -2024,6 +2026,7 @@ static int l_sacred_arm_spawn_teleport(lua_State* L) {
     } else {
         g_tp_ov.until_ms = 0;            // one-shot
     }
+    g_tp_ov.hero_types = 0;         // any hero
     g_tp_ov.armed  = true;
     g_tp_log       = 0;             // re-enable the arg log for this load
     g_tp_arm_loads = g_qs_loads;    // a savegame load after this cancels it
@@ -3750,7 +3753,7 @@ __declspec(naked) static void __cdecl hook_quest_solved() {
 // --- Engine teleport hijack (FUN_0054d9d0) -------------------------------
 // One-shot destination override for the campaign new-game hero start.
 // (struct TpOverride + extern decls are up near l_sacred_set_spawn.)
-TpOverride    g_tp_ov  = { false, 0, 0, false, 0, 0 };
+TpOverride    g_tp_ov  = { false, 0, 0, false, 0, 0, 0 };
 volatile long g_tp_log = 0;
 constexpr long TP_LOG_MAX = 24;
 
@@ -3784,6 +3787,16 @@ extern "C" void __cdecl engine_tp_filter(uintptr_t this_, int* args) {
             g_tp_ov.armed = false;
             sdk_log("[tp] savegame loaded since the spawn hijack was armed: "
                     "hijack cancelled, hero keeps (%d,%d)", x, y);
+        }
+        if (g_tp_ov.armed && is_hero && g_tp_ov.hero_types) {
+            // A spawn for some classes only (a storyline): another class's hero
+            // starts where the campaign puts him.
+            uint32_t t = *(uint32_t*)(this_ + 0x10) & 0xFFFF;
+            if (t >= 32 || !(g_tp_ov.hero_types & (1ul << t))) {
+                g_tp_ov.armed = false;
+                sdk_log("[tp] hero type %u is not one the spawn is for (%08lX): "
+                        "hijack dropped, hero keeps (%d,%d)", t, g_tp_ov.hero_types, x, y);
+            }
         }
         if (g_tp_ov.armed && is_hero) {
             // until_ms == 0  → ONE-SHOT: rewrite the first hero teleport
