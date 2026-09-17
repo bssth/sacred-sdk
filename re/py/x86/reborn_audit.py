@@ -55,7 +55,8 @@ for tag in re.findall(r"// --- (\w+):", src):
         refs |= {op.imm & 0xffffffff for i in fins for op in i.operands if op.type == X.X86_OP_IMM}
         if va not in {i.address for i in fins}:
             print(f"  {tag} site {va:#x}: not an instruction boundary of our function"); problems += 1
-        if va + ln not in {i.address for i in fins}:
+        nxt_entry = min((e for e in scan.GH_ENTRIES if e > scan.GH_MAX[fn]), default=None)
+        if va + ln not in {i.address for i in fins} and not (va == fn and va + ln == nxt_entry):
             print(f"  {tag} site {va:#x}+{ln}: end is not an instruction boundary"); problems += 1
         nb = apply(arr(n), va, [x for x in fixes(f) if x[1] not in ("Rel32ToStub",)])
         ins = list(md.disasm(bytes(nb), va))

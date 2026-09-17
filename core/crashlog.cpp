@@ -64,7 +64,13 @@ static LONG WINAPI veh(EXCEPTION_POINTERS* ep) {
 
     const CONTEXT* c = ep->ContextRecord;
     const uintptr_t eip = c->Eip;
-    if (!is_ours_or_engine(eip)) return EXCEPTION_CONTINUE_SEARCH;
+    // Execution that left the code altogether (a jump to 0, a return into the
+    // stack under DEP) is exactly the corruption a bad patch causes, and its
+    // stack still says where it came from. Anything else outside our code is
+    // someone else's business.
+    const bool wild_exec = code == EXCEPTION_ACCESS_VIOLATION &&
+                           er->ExceptionInformation[0] == 8 && !is_ours_or_engine(eip);
+    if (!wild_exec && !is_ours_or_engine(eip)) return EXCEPTION_CONTINUE_SEARCH;
 
     for (LONG i = 0; i < g_nseen && i < kMaxLogged; ++i)
         if (g_seen[i] == eip) return EXCEPTION_CONTINUE_SEARCH;

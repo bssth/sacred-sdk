@@ -28,7 +28,7 @@ Expected bytes always come out of OUR Sacred_decrypted.exe. Sites are grouped
 into one record per function of ours, because a half-patched function draws a
 torn frame and the patch engine applies a record atomically.
 """
-import os, re, sys, json, struct, collections
+import os, re, sys, json, bisect, struct, collections
 from capstone import Cs, CS_ARCH_X86, CS_MODE_32
 from capstone import x86 as X
 import buildmap as bm
@@ -45,10 +45,13 @@ MD = Cs(CS_ARCH_X86, CS_MODE_32)
 MD.detail = True
 
 SLOTS = (0x00A1EF00, 0x00A1F100)
+CAVE_LO, CAVE_HI = 0x008E4300, 0x008E5000
+TAIL_LO, TAIL_HI = 0x01AC6000, 0x01ADC000
 IMAGE = (0x00400000, 0x01E00000)
 
 
 SLOT_SET = set()   # addresses ReBorn's init actually writes in its table, filled by native_slots()
+CONSTANT_IMMS = set()   # ReBorn instructions whose image-range immediate is a number (hd_decisions.json)
 
 
 def is_slot(v):
@@ -588,6 +591,175 @@ def port_block(ours, reb, mp, blk, found, is_layout):
     return fx, None
 
 
+def relocate_body(ours, reb, mp, body, map_text):
+    """Stub bytes + fixups for `body` (ReBorn instructions), exits through map_text."""
+    entry = body[0].address
+    end = body[-1].address + body[-1].size
+    blob, fx = bytearray(), []
+    for ins in body:
+        base = len(blob)
+        blob += ins.bytes
+        t = branch_target(ins)
+        if t is not None:
+            if entry <= t < end:
+                continue
+            if not reb.in_text(t):
+                return None, f"stub branches into other ReBorn code at {t:#x}"
+            if ins.imm_size != 4:
+                return None, f"short branch out of the stub at {ins.address:#x}"
+            m = map_text(t)
+            if m is None:
+                return None, f"cannot map stub exit {t:#x}"
+            fx.append((base + ins.imm_offset, "Rel32ToVA", m))
+            continue
+        for op in ins.operands:
+            if abs_mem(op):
+                v, off = op.mem.disp & 0xFFFFFFFF, base + ins.disp_offset
+                if is_slot(v) or (0xA1EF40 <= v < 0xA1F0E0 and mp.data(v) is None):
+                    fx.append((off, "Abs32Geom", v)); continue
+                if v in mp.iat_r:
+                    m = mp.iat_map.get(v)
+                    if m is None:
+                        return None, f"import {mp.iat_r[v]} missing in our build"
+                    fx.append((off, "Abs32ToVA", m)); continue
+                c = mp.readonly_const(v, op.size)
+                if c is not None and op.size == 4:
+                    fx.append((off, "Abs32Const", struct.unpack("<I", c)[0])); continue
+                m = mp.data(v)
+                if m is None:
+                    return None, f"cannot map stub data {v:#x}"
+                fx.append((off, "Abs32ToVA", m))
+            elif op.type == X.X86_OP_IMM and IMAGE[0] <= (op.imm & 0xFFFFFFFF) < IMAGE[1]:
+                m = mp.data(op.imm & 0xFFFFFFFF)
+                if m is None:
+                    return None, f"cannot map stub address operand {op.imm & 0xFFFFFFFF:#x}"
+                fx.append((base + ins.imm_offset, "Abs32ToVA", m))
+    return (bytes(blob), fx), None
+
+
+def port_function(ours, reb, dm, mp, f0, found, is_layout):
+    """Replace a whole function of ours with ReBorn's rewrite of it.
+
+    For functions ReBorn changed too much to port piecewise (the camera zoom
+    grew by four `push [slot]` bytes). Conditions: ReBorn's version fits in our
+    function plus the padding after it; nothing enters our function anywhere but
+    its entry (no interior calls, no switch tables); a C++ exception prologue
+    keeps our own handler. Every outside reference is re-pointed, addresses
+    inside the function map by offset, and stubs it branches to come along.
+    Returns (site dict, None) or (None, why)."""
+    import scan, xrefs
+    entries = sorted(scan.GH_ENTRIES)
+    f1 = scan.GH_MAX.get(f0)
+    if f1 is None:
+        return None, "not a function entry"
+    nxt = entries[bisect.bisect_right(entries, f1)]
+    room = nxt - f0
+    if any(xrefs.DWORDMAP.get(v) for v in range(f0 + 1, f1 + 1)):
+        return None, "a table points into the function (switch?)"
+    if any(not (f0 <= s <= f1) for v in range(f0 + 1, f1 + 1) for s in xrefs.CALLMAP.get(v, [])):
+        return None, "code outside branches into the middle of the function"
+    rs, _ = dm.locate_new(f0, before=0, after=24, win=0x3000)
+    rn, _ = dm.locate_new(nxt, before=0, after=24, win=0x3000)
+    if rs is None or rn is None or rn <= rs:
+        return None, "ReBorn's copy of the function not found"
+    re_ = rn
+    while re_ > rs and reb.rd(re_ - 1, 1) in (b"\x90", b"\xcc"):
+        re_ -= 1
+    L = re_ - rs
+    if L > room:
+        return None, f"ReBorn's version is {L} bytes, ours has room for {room}"
+    # A layout rewrite changes a function by a few bytes (four `push [slot]` grew
+    # the zoom by 4). Much more means ReBorn changed what the function does, and
+    # the port would carry that too (FUN_006E7AF0, +93 B, crashed in the menu).
+    if L - (f1 + 1 - f0) > 16:
+        return None, f"ReBorn's version is {L - (f1 + 1 - f0)} bytes longer - more than a layout rewrite"
+    theirs = dis(reb, rs, L)
+    if sum(i.size for i in theirs) != L:
+        return None, "ReBorn's version does not decode to whole instructions"
+    mine_list = dis(ours, f0, f1 + 1 - f0)
+    mine_at = {i.address: i for i in mine_list}
+    # Same function, same calls in the same order - proven through the address map.
+    our_calls = [branch_target(i) for i in mine_list if i.group(X.X86_GRP_CALL) and branch_target(i) is not None]
+    their_calls = []
+    for i in theirs:
+        t = branch_target(i) if i.group(X.X86_GRP_CALL) else None
+        if t is None or CAVE_LO <= t < CAVE_HI or TAIL_LO <= t < TAIL_HI:
+            continue
+        their_calls.append(mp.code(t))
+    ours_plain = [t for t in our_calls]
+    if their_calls != ours_plain:
+        return None, (f"its calls do not match ours ({len(their_calls)} against {len(ours_plain)}, "
+                      f"first difference at #{next((k for k, (a, b) in enumerate(zip(their_calls, ours_plain)) if a != b), min(len(their_calls), len(ours_plain)))})")
+    inside = lambda t: rs <= t < re_
+    to_ours = lambda t: f0 + (t - rs) if inside(t) else mp.code(t)
+    fx, stubs = [], []
+    for ins in theirs:
+        base = ins.address - rs
+        t = branch_target(ins)
+        if t is not None:
+            if inside(t):
+                continue
+            if ins.imm_size != 4:
+                return None, f"short branch out of the function at {ins.address:#x}"
+            if CAVE_LO <= t < CAVE_HI or TAIL_LO <= t < TAIL_HI:
+                body = stub_body(reb, t)
+                if body is None:
+                    return None, f"stub at {t:#x} has no clean end"
+                got, why = relocate_body(ours, reb, mp, body, to_ours)
+                if got is None:
+                    return None, why
+                stubs.append((len(stubs), got[0], got[1]))
+                fx.append((base + ins.imm_offset, "Rel32ToStub", len(stubs) - 1))
+                continue
+            m = mp.code(t)
+            if m is None:
+                return None, f"cannot map call/jump target {t:#x}"
+            fx.append((base + ins.imm_offset, "Rel32ToVA", m))
+            continue
+        for op in ins.operands:
+            if abs_mem(op):
+                v, off = op.mem.disp & 0xFFFFFFFF, base + ins.disp_offset
+                if is_layout(v):
+                    fx.append((off, "Abs32Geom", v)); continue
+                if v in mp.iat_r:
+                    m = mp.iat_map.get(v)
+                    if m is None:
+                        return None, f"import {mp.iat_r[v]} missing in our build"
+                    fx.append((off, "Abs32ToVA", m)); continue
+                m = mp.data(v)
+                if m is None:
+                    c = mp.readonly_const(v, op.size)
+                    if c is not None and op.size == 4:
+                        fx.append((off, "Abs32Const", struct.unpack("<I", c)[0])); continue
+                    return None, f"cannot map data {v:#x}"
+                fx.append((off, "Abs32ToVA", m))
+            elif op.type == X.X86_OP_IMM and IMAGE[0] <= (op.imm & 0xFFFFFFFF) < IMAGE[1]:
+                v = op.imm & 0xFFFFFFFF
+                if ins.address in CONSTANT_IMMS:
+                    continue
+                if inside(v):
+                    fx.append((base + ins.imm_offset, "Abs32ToVA", f0 + (v - rs))); continue
+                mine = mine_at.get(f0 + base)
+                if reb.in_text(v) and base < 16 and mine is not None and bytes(mine.bytes[:1]) == bytes(ins.bytes[:1]) \
+                        and mine.imm_size == 4:
+                    # the C++ exception handler thunk pushed by the prologue: keep ours
+                    fx.append((base + ins.imm_offset, "Abs32ToVA", mine.operands[-1].imm & 0xFFFFFFFF)); continue
+                m = mp.data(v) if not reb.in_text(v) else mp.code(v)
+                if m is None:
+                    return None, f"cannot map address operand {v:#x}"
+                fx.append((base + ins.imm_offset, "Abs32ToVA", m))
+    kinds = {("set", 4): "Imm32GeomSet", ("set", 2): "Imm16GeomSet",
+             ("add", 4): "Imm32GeomAdd", ("add", 2): "Imm16GeomAdd"}
+    for tt, f in found.items():
+        if rs <= tt < re_:
+            fx.append((tt - rs, kinds[(f["kind"], f["width"])], f["slot"]))
+    new = reb.rd(rs, L) + b"\xcc" * (room - L)
+    site = dict(va=f0, len=room, expect=ours.rd(f0, room), new=new, fx=fx, stub=None, whole=stubs,
+                note=f"whole function: ReBorn {rs:#x}..{re_:#x} ({L} B) over ours ({room} B incl. padding), "
+                     f"{len(stubs)} stub(s)")
+    return site, None
+
+
 def main():
     import scan
     import reborn_catalog as rc
@@ -600,6 +772,7 @@ def main():
         for k, v in json.load(open(DECISIONS, encoding="utf-8")).items():
             if not k.startswith("_"):
                 decisions[int(k, 0)] = (v["verdict"], v.get("why", "")) if isinstance(v, dict) else (v, "")
+    CONSTANT_IMMS.update(a for a, v in decisions.items() if v[0] == "constant")
     ours, reb, dm = bm.load()
     native_slots(reb)
     wild = [(r["reborn_va"], r["reborn_span"]) for r in d["sites"] if r["class"] != "selfpatch"]
@@ -884,13 +1057,24 @@ def main():
                 func = best[1]
         if func is not None:
             incomplete.setdefault(func, []).append(reb_va)
-    for key in list(items):
-        if key[0] in incomplete:
-            n = len(items.pop(key))
-            rejected.append((None, f"function {key[1]}",
-                             f"dropped {n} site(s): layout sites at ReBorn " +
-                             ", ".join(f"{x:#x}" for x in incomplete[key[0]]) + " are not ported"))
-            tally["sites dropped with their function"] += n
+    # An incomplete function gets one more chance as a whole: ReBorn's version of
+    # it replaces ours in one site, when the conditions of port_function hold.
+    import scan
+    names = {k[0]: k[1] for k in items}
+    for func in list(incomplete):
+        site, why = port_function(ours, reb, dm, mp, func, found, is_layout)
+        name = names.get(func) or scan.gh_name(func)
+        dropped = sum(len(v) for k, v in items.items() if k[0] == func)
+        for k in [k for k in items if k[0] == func]:
+            items.pop(k)
+        if site is not None:
+            items[(func, name)] = [site]
+            tally["whole function ported"] += 1
+            continue
+        rejected.append((None, f"function {name}",
+                         f"dropped {dropped} site(s): layout sites at ReBorn " +
+                         ", ".join(f"{x:#x}" for x in incomplete[func]) + f" are not ported; as a whole: {why}"))
+        tally["sites dropped with their function"] += dropped
 
     # --- emit ---------------------------------------------------------------
     out, rows = [], []
@@ -925,6 +1109,18 @@ def main():
             out.append(f"// {s['va']:#010x}  {s['note']}")
             out.append(f"static const uint8_t {tag}_e{i}[] = {c_bytes(s['expect'])};")
             out.append(f"static const uint8_t {tag}_n{i}[] = {c_bytes(s['new'])};")
+            if s.get("whole"):
+                remap = {}
+                for lid, blob, sfx in s["whole"]:
+                    remap[lid] = sid
+                    out.append(f"static const uint8_t {tag}_s{sid}[] = {c_bytes(blob)};")
+                    if sfx:
+                        out.append(f"static const Fixup {tag}_sf{sid}[] = {{ " + ", ".join(
+                            f"{{ {o}, Fix::{k}, 0x{a:08X}u }}" for o, k, a in sfx) + " };")
+                    stub_rows.append(f"    {{ {sid}, {len(blob)}, {tag}_s{sid}, "
+                                     f"{f'{tag}_sf{sid}' if sfx else 'nullptr'}, {len(sfx)}, {i} }},")
+                    sid += 1
+                s["fx"] = [(o, k, remap[a]) if k == "Rel32ToStub" else (o, k, a) for o, k, a in s["fx"]]
             if s["stub"]:
                 s["fx"] = [(1, "Rel32ToStub", sid)]
                 blob, sfx = s["stub"]
@@ -935,11 +1131,13 @@ def main():
                 stub_rows.append(f"    {{ {sid}, {len(blob)}, {tag}_s{sid}, "
                                  f"{f'{tag}_sf{sid}' if sfx else 'nullptr'}, {len(sfx)}, {i} }},")
                 sid += 1
-            out.append(f"static const Fixup {tag}_f{i}[] = {{ " + ", ".join(
-                f"{{ {o}, Fix::{k}, 0x{a:08X}u }}" for o, k, a in s["fx"]) + " };")
+            if s["fx"]:
+                out.append(f"static const Fixup {tag}_f{i}[] = {{ " + ", ".join(
+                    f"{{ {o}, Fix::{k}, 0x{a:08X}u }}" for o, k, a in s["fx"]) + " };")
         out.append(f"static const Site {tag}_sites[] = {{")
         for i, s in enumerate(clean):
-            out.append(f"    {{ 0x{s['va']:08X}u, {s['len']}, {tag}_e{i}, {tag}_n{i}, {tag}_f{i}, {len(s['fx'])} }},")
+            fxr = f"{tag}_f{i}" if s["fx"] else "nullptr"
+            out.append(f"    {{ 0x{s['va']:08X}u, {s['len']}, {tag}_e{i}, {tag}_n{i}, {fxr}, {len(s['fx'])} }},")
         out.append("};")
         if stub_rows:
             out.append(f"static const Stub {tag}_stubs[] = {{")

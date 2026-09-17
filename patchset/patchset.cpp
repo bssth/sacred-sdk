@@ -74,7 +74,9 @@ static constexpr int kGeneratedN = 0;
 // the built-in fixes.
 constexpr int MAX_RECORDS = 512;
 constexpr int MAX_JOURNAL = 2048;
-constexpr int MAX_SITE_LEN = 256;   // a ported ReBorn rewrite can span a few dozen instructions
+// A site can be a whole function when ReBorn's rewrite of it is ported as one.
+constexpr int MAX_SITE_LEN = 16384;
+constexpr int JOURNAL_POOL = 1 << 21;   // saved original bytes of every site, all records
 
 struct RecState {
     const Record* rec;
@@ -86,12 +88,17 @@ struct RecState {
 struct JournalEntry {
     uintptr_t addr;
     uint16_t  len;
-    uint8_t   saved[MAX_SITE_LEN];
+    uint32_t  pool_off;              // into g_journal_pool
 };
 
 static RecState     g_rs[MAX_RECORDS];
 static int          g_rs_n = 0;
 static JournalEntry g_journal[MAX_JOURNAL];
+static uint8_t      g_journal_pool[JOURNAL_POOL];
+static uint32_t     g_journal_pool_used = 0;
+// Scratch for a site's live and new bytes. install() runs once, on one thread.
+static uint8_t      g_scratch_live[MAX_SITE_LEN];
+static uint8_t      g_scratch_out[MAX_SITE_LEN];
 static int          g_journal_n = 0;
 static char         g_status[192] = "patchset: not run";
 static int          g_applied = 0, g_skipped = 0, g_failed = 0;
@@ -408,16 +415,14 @@ static bool apply_record(RecState& rs, uintptr_t reb) {
             set_state(rs, St::Skipped, "site %u longer than %d bytes", i, MAX_SITE_LEN);
             return false;
         }
-        uint8_t live[MAX_SITE_LEN];
+        uint8_t* live = g_scratch_live;
         if (!seh_read((const void*)(reb + s.va), live, s.len)) {
             set_state(rs, St::Skipped, "site %u @%08x unreadable", i, s.va);
             return false;
         }
         if (memcmp(live, s.expect, s.len) != 0) {
             // Already applied? Then say so rather than crying mismatch.
-            uint8_t want[MAX_SITE_LEN];
-            memcpy(want, s.bytes, s.len);
-            bool same_as_ours = (memcmp(live, want, s.len) == 0);
+            bool same_as_ours = (memcmp(live, s.bytes, s.len) == 0);
             set_state(rs, St::Skipped, same_as_ours
                           ? "site %u @%08x already patched"
                           : "site %u @%08x bytes differ from expected",
@@ -495,7 +500,7 @@ static bool apply_record(RecState& rs, uintptr_t reb) {
         const Site& s = r.sites[i];
         uintptr_t at = reb + s.va;
 
-        uint8_t out[MAX_SITE_LEN];
+        uint8_t* out = g_scratch_out;
         memcpy(out, s.bytes, s.len);
         cx.site_va = at;
         cx.site_expect = s.expect;
@@ -512,17 +517,18 @@ static bool apply_record(RecState& rs, uintptr_t reb) {
         }
         if (bad) { revert(r.key); cave::rewind_to(cave_mark); return false; }
 
-        if (g_journal_n >= MAX_JOURNAL) {
+        if (g_journal_n >= MAX_JOURNAL || g_journal_pool_used + s.len > JOURNAL_POOL) {
             set_state(rs, St::Failed, "journal full");
             revert(r.key); cave::rewind_to(cave_mark); return false;
         }
         JournalEntry& je = g_journal[g_journal_n];
-        je.addr = at; je.len = s.len;
-        if (!seh_read((const void*)at, je.saved, s.len)) {
+        je.addr = at; je.len = s.len; je.pool_off = g_journal_pool_used;
+        if (!seh_read((const void*)at, g_journal_pool + je.pool_off, s.len)) {
             set_state(rs, St::Failed, "site %u unreadable at commit", i);
             revert(r.key); cave::rewind_to(cave_mark); return false;
         }
         ++g_journal_n; ++rs.journal_n;
+        g_journal_pool_used += s.len;
 
         if (!seh_write_code(at, out, s.len)) {
             set_state(rs, St::Failed, "site %u write failed @%08x", i, s.va);
@@ -602,7 +608,7 @@ static void revert_slice(int first, int n) {
     for (int i = first + n - 1; i >= first; --i) {
         JournalEntry& je = g_journal[i];
         if (!je.addr) continue;
-        seh_write_code(je.addr, je.saved, je.len);
+        seh_write_code(je.addr, g_journal_pool + je.pool_off, je.len);
         je.addr = 0;
     }
 }
@@ -636,7 +642,7 @@ VerifyResult verify_live() {
         const Record& r = *g_rs[i].rec;
         for (uint8_t k = 0; k < r.nsites; ++k) {
             const Site& s = r.sites[k];
-            uint8_t live[MAX_SITE_LEN];
+            static uint8_t live[MAX_SITE_LEN];   // the overlay button / console command, one at a time
             if (!seh_read((const void*)(reb + s.va), live, s.len)) { ++other; continue; }
             if      (memcmp(live, s.expect, s.len) == 0) ++as_expect;
             else if (memcmp(live, s.bytes,  s.len) == 0) ++as_ours;

@@ -1,7 +1,11 @@
 {
-  "_about": "Reviewed verdicts on ReBorn patch sites, keyed by ReBorn VA. skip = not a layout patch, ignored; reject = a layout patch we will not port, so its function stays unpatched. Addresses and reasons only - no bytes. Read by re/py/x86/reborn_emit.py.",
+  "_about": "Reviewed verdicts on ReBorn patch sites and instructions, keyed by ReBorn VA. skip = not a layout patch, ignored; reject = a layout patch we will not port, so its function stays unpatched; constant = an immediate in the image address range that is a plain number, not an address. Addresses and reasons only - no bytes. Read by re/py/x86/reborn_emit.py.",
   "0x008156E8": {
     "verdict": "skip",
     "why": "ReBorn's own config loader (reads the SR_* keys from Settings.cfg, runs its layout init, then the engine's FULLSCREEN reader). The SDK reads [hd] and computes the layout itself."
+  },
+  "0x0061377C": {
+    "verdict": "constant",
+    "why": "cEngine_captureInternal: the capture buffer size (0x11E9000 bytes, room for large screens), not an address"
   }
 }
