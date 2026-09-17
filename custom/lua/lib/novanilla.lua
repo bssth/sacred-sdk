@@ -252,27 +252,29 @@ end
 
 -- Keep them hidden: once a world is ready, and every ~5 s after (16 SetIcon records
 -- in global sections, mostly area triggers, can put a glyph back). Call once.
+-- `when`, optional: a function; the sweep runs only in worlds where it returns
+-- true (the stripped scripts are one class's, `classes.only(...).active`).
 local watching = false
-function M.keep_markers_hidden()
+function M.keep_markers_hidden(when)
   if watching then return end
   watching = true
   local V, t = require "vars", 0
   sacred.on_tick(function()
-    if not V.is_ready() then t = 0; return end
+    if not V.is_ready() or (when and not when()) then t = 0; return end
     t = t + 1
     if t == 8 or t % 20 == 0 then M.hide_dead_markers() end
   end)
 end
 
 -- Sweep the object table for silent givers, a slice every tick once a world is
--- ready. Call once.
+-- ready. Call once. `when` as for keep_markers_hidden.
 local freeing = false
-function M.keep_givers_talking()
+function M.keep_givers_talking(when)
   if freeing then return end
   freeing = true
   local V, t = require "vars", 0
   sacred.on_tick(function()
-    if not V.is_ready() then t = 0; return end
+    if not V.is_ready() or (when and not when()) then t = 0; return end
     t = t + 1
     if t >= 12 then M.free_silent_givers(600) end
   end)

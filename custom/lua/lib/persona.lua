@@ -20,6 +20,10 @@
 --   roch:companion(true)              -- joins the party
 --   local o = roch:npc()              -- the npcobj wrapper, or nil
 --
+-- spec.when = a function: the persona exists only in worlds where it returns
+-- true. A storyline for one class passes `require("classes").only(C.X).active`,
+-- and heroes of other classes never meet the character.
+--
 -- WHAT MAKES IT PERSISTENT. A savegame brings back the world, our NPCs included,
 -- with the same handles -- so the handle is written into an ENGINE VARIABLE
 -- (`vars.lua`, saved with the game) together with the spot he was last told to
@@ -59,10 +63,18 @@ end
 
 function P.get(id) return personas[id] end
 
+-- Does this persona belong in the current world (spec.when)?
+function Persona:wanted()
+  local when = self.spec.when
+  return not when or when() and true or false
+end
+
 -- Bring every defined persona into the world. Call it once a world is up
 -- (vars.lua V.on_ready does that for you if you use P.watch()).
 function P.ensure_all()
-  for _, p in pairs(personas) do p:ensure() end
+  for _, p in pairs(personas) do
+    if p:wanted() then p:ensure() end
+  end
 end
 
 -- ---- one persona --------------------------------------------------------------
@@ -194,7 +206,7 @@ function P.watch()
     if not V.is_ready() then return end
     t = t + 1
     for _, p in pairs(personas) do
-      local o = p:npc()
+      local o = p:wanted() and p:npc() or nil
       if o and p.spec.immortal then
         local a = sacred.npc_ai and sacred.npc_ai(o:handle())
         if (a and a.fc == 9) or not o:alive() then

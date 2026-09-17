@@ -122,14 +122,15 @@ function W.open()
   log("%d teleporters armed (%d objects placed)", #W.TELEPORTERS, #made)
 end
 
--- Open once whenever a world becomes ready. Call once.
+-- Open once whenever a world becomes ready. Call once. `when`, optional: a
+-- function; only worlds where it returns true are opened.
 local armed = false
-function W.keep_open()
+function W.keep_open(when)
   if armed then return end
   armed = true
   local t = 0
   sacred.on_tick(function()
-    if not V.is_ready() then t = 0; return end
+    if not V.is_ready() or (when and not when()) then t = 0; return end
     t = t + 1
     if t == 10 then W.open() end
   end)
