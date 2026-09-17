@@ -45,6 +45,11 @@ local BASE = "campaign"
 local v   = require "vanilla"
 local NPC = require "npc"
 local V   = require "vars"
+local C   = require "classes"
+-- The storyline is the Vampiress's. Every runtime handler in this file goes
+-- through ONLY (and the library sweeps get ONLY.active), so a hero of any other
+-- class plays the vanilla campaign: no start teleport, no scene, no quests.
+local ONLY = C.only(C.VAMPIRESS)
 -- Q1's step lives in an engine variable, so a savegame carries it (vars.lua;
 -- SDK_GAPS gaps 13 and 1). SDKQ_99_HCAP / SDKQ_99_HROCH hold the handles of the
 -- NPCs spawned for it, for the save/load probe.
@@ -64,8 +69,8 @@ sacred.log("[vamp] base = " .. BASE .. " (" .. #recs .. " records)")
 -- vanilla quest row ever shows. Quest logic + the new-game intro run
 -- untouched (we never delete/edit a FunkCode record). One call, persists.
 if HIDE then
-  sacred.hide_vanilla_quests(true)
-  sacred.log("[vamp] hide_vanilla_quests ON (journal-builder hook)")
+  V.on_ready(function() sacred.hide_vanilla_quests(ONLY.active()) end)
+  sacred.log("[vamp] hide_vanilla_quests in a Vampiress world (journal-builder hook)")
 end
 
 -- ============================================================
@@ -90,7 +95,7 @@ if SPAWN then
   -- world (sacred.set_new_game_spawn), so a second new game in one process gets
   -- it too. A hijack still armed once the world is ready (no start teleport
   -- came) is dropped then, so it cannot catch a later teleport.
-  sacred.set_new_game_spawn(SPAWN_KX, SPAWN_KY)
+  sacred.set_new_game_spawn(SPAWN_KX, SPAWN_KY, ONLY.types)   -- a Vampiress's new game only
   V.on_ready(function() sacred.disarm_spawn_teleport() end)
 end
 
@@ -167,7 +172,7 @@ if SCENE then
     if inf and inf.type == want then return NPCo.wrap(h) end
     return nil
   end
-  V.on_ready(function(loaded)
+  ONLY.on_ready(function(loaded)
     if not loaded and SCENE_SERIAL == V.world() then return end   -- the same world: keep it
     SCENE_SERIAL = V.world()
     settle = 0
@@ -190,7 +195,7 @@ if SCENE then
       :format(cap:handle(), #SCENE_GUARDS, #GUARD_POSTS))
   end)
   CAP_SOFT = CAP_SOFT or nil  -- GLOBAL: soft-immortal captain ref
-  sacred.on_tick(function()
+  ONLY.on_tick(function()
     -- Soft-immortal: top up the captain's HP every tick instead of the
     -- engine invuln bit (+0x14|0x200000) — that bit draws the red ward
     -- aura (measured: bare +14=40400000 no-glow vs invuln +14=40600000
@@ -327,7 +332,7 @@ if SCENE then
   -- HP is +0x4d4/+0x4d8 only, never the AI fields, so it does not affect
   -- the engine-faithful proactive state.
   local hk = 0
-  sacred.on_tick(function()
+  ONLY.on_tick(function()
     if not (V.is_ready() and scene_alive()) then return end
     hk = hk + 1
     if hk < 24 then return end
@@ -346,7 +351,7 @@ if SCENE then
   -- (runtime NPCs never fire named triggers). Q1_CAPTAIN_TALK is a global
   -- defined in the Q1 block below; called lazily (exists by tick time).
   local armed_for = nil                -- the captain the offer is attached to
-  sacred.on_tick(function()
+  ONLY.on_tick(function()
     local cap = CAP_SOFT
     if not (cap and cap.alive and cap:alive()) or armed_for == cap then return end
     if not V.is_ready() then return end
@@ -472,7 +477,7 @@ do
   -- Every ready world takes Q1 from its variable: nothing in a new game (the
   -- engine resets variables for one), the saved step after a savegame load.
   -- The log line doubles as the save/load probe.
-  V.on_ready(function(loaded)
+  ONLY.on_ready(function(loaded)
     if not loaded and Q1_SERIAL == V.world() then return end      -- the same world: keep Q1
     Q1_SERIAL = V.world()
     local was = Q1 and Q1.state
@@ -637,7 +642,7 @@ do
     Q1.state = s
   end
 
-  sacred.on_tick(function()
+  ONLY.on_tick(function()
     -- Need the scene up: Captain Miles (CAP_SOFT) + guards (SCENE_GUARDS).
     local cap = CAP_SOFT
     if not (cap and cap.alive and cap:alive()) then return end
@@ -1612,13 +1617,13 @@ do
     elseif ARROW[s] then point_at(ARROW[s]) end
   end
 
-  V.on_ready(function(loaded)
+  ONLY.on_ready(function(loaded)
     if not loaded and Q2_SERIAL == V.world() then return end   -- the same world: keep Q2
     Q2_SERIAL = V.world()
     Q2 = { state = 0 }                        -- a savegame's step comes back through Q2_RESUME
   end)
 
-  sacred.on_tick(function()
+  ONLY.on_tick(function()
     if not V.is_ready() or Q2.state == 0 then return end
     if Q2.need_axe then
       Q2.need_axe = nil
@@ -1787,7 +1792,7 @@ if FAINT_TEST then
 
   -- The one with the flag is a persona, so the same run also shows persistence.
   local revive = Pr.define("faint", {
-    type = NPC.VALORIAN_SOLDIER, name = "res:FT_REVIVE", template = "quest_npc",
+    type = NPC.VALORIAN_SOLDIER, name = "res:FT_REVIVE", template = "quest_npc", when = ONLY.active,
     home = { CX - 4, CY + 2 }, immortal = true, hp = 60, companion = true,
     setup = function(o, adopted)
       o:stance(1, 7)
@@ -1834,9 +1839,9 @@ if FAINT_TEST then
     FT.t = 0
   end
 
-  V.on_ready(function() FT.pending = 10 end)
+  ONLY.on_ready(function() FT.pending = 10 end)
 
-  sacred.on_tick(function()
+  ONLY.on_tick(function()
     if not V.is_ready() then return end
     if FT.pending then
       FT.pending = FT.pending - 1
@@ -1906,9 +1911,9 @@ end
 if NO_VANILLA_QUESTS then
   local NV = require "novanilla"
   NV.strip(recs, "FunkCode")
-  NV.keep_markers_hidden()               -- the givers of stripped quests keep their "!" otherwise
-  NV.keep_givers_talking()               -- and unbound from their dead nodes they chatter
-  require("openworld").keep_open()       -- the passes, doors and teleporters quests used to open
+  NV.keep_markers_hidden(ONLY.active)    -- the givers of stripped quests keep their "!" otherwise
+  NV.keep_givers_talking(ONLY.active)    -- and unbound from their dead nodes they chatter
+  require("openworld").keep_open(ONLY.active)   -- the passes, doors and teleporters quests used to open
 end
 
 return recs
